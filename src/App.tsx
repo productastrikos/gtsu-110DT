@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { SocketProvider } from './services/socket';
-import CWMLayout from './components/CWMLayout';
+import AppLayout from './components/cwm/Layout';
 import CWMLoginPage from './pages/CWMLoginPage';
 import ProfilePage from './pages/CWMProfile';
 import { OverviewPage }          from './pages/OverviewPage';
@@ -72,7 +72,7 @@ function App() {
   return (
     <BrowserRouter>
       <SocketProvider>
-        <CWMLayout user={user} onLogout={handleLogout} theme={theme} onThemeToggle={toggleTheme}>
+        <AppLayout user={user} onLogout={handleLogout} theme={theme} onThemeToggle={toggleTheme}>
           <Routes>
             <Route path="/"                    element={<OverviewPage />} />
             <Route path="/start-sequence"      element={<StartSequencePage />} />
@@ -92,7 +92,7 @@ function App() {
             <Route path="/profile"             element={<ProfilePage user={user} onLogout={handleLogout} />} />
             <Route path="*"                    element={<Navigate to="/" replace />} />
           </Routes>
-        </CWMLayout>
+        </AppLayout>
       </SocketProvider>
     </BrowserRouter>
   );

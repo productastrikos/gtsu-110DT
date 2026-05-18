@@ -78,41 +78,73 @@ export default function KPICard({ label, value, unit, icon, color, rag: ragProp,
       className="kpi-card"
       style={{ cursor: onClick ? 'pointer' : 'default' }}
     >
-      <div className="flex items-start justify-between mb-4">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-base leading-none flex-shrink-0"
-          style={{ color: r.iconClr, background: `color-mix(in srgb, ${r.iconClr} 12%, transparent)` }}>
+      {/* Top row: icon left, trend right */}
+      <div className="flex items-start justify-between mb-3">
+        <div
+          className="w-9 h-9 flex items-center justify-center text-base leading-none flex-shrink-0"
+          style={{ color: r.iconClr }}
+        >
           {icon || '▣'}
         </div>
         {hasTrend && (
-          <span className="kpi-trend-badge text-[10px] font-semibold px-2 py-1.5 rounded-lg flex flex-col items-center leading-tight"
-            style={{ color: r.badge.color as string, minWidth: '2.8rem', textAlign: 'center' }}>
-            <span>{isPos ? '▲' : '▼'}</span>
-            <span>{Math.abs(trend as number).toFixed(1)}%</span>
+          <div className="text-right">
+            <div
+              className="text-[11px] font-bold leading-tight"
+              style={{ color: isPos ? 'var(--cwm-success)' : 'var(--cwm-danger)' }}
+            >
+              {isPos ? '▲' : '▼'} {Math.abs(trend as number).toFixed(1)}%
+            </div>
+            <div className="text-[9px] leading-tight mt-0.5" style={{ color: 'var(--cwm-text-faint)' }}>
+              vs yesterday
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Value */}
+      <div className="mb-0.5 leading-none">
+        <span className="text-[1.75rem] font-bold leading-none tracking-tight" style={{ color: 'var(--cwm-text)' }}>
+          {value}
+        </span>
+        {unit && (
+          <span className="text-xs font-medium ml-1.5" style={{ color: 'var(--cwm-text-faint)' }}>
+            {unit}
           </span>
         )}
       </div>
 
-      <div className="mb-1 leading-none text-center">
-        <span className="text-[2.1rem] font-bold leading-none tracking-tight" style={{ color: 'var(--cwm-text)' }}>
-          {value}
-        </span>
-        {unit && <span className="text-xs font-medium ml-1" style={{ color: 'var(--cwm-text-faint)' }}>{unit}</span>}
-      </div>
-
-      <p className="text-[11px] font-medium mb-4 leading-snug text-center" style={{ color: 'var(--cwm-text-muted)' }}>
+      {/* Label */}
+      <p className="text-[11px] font-medium mb-3 leading-snug" style={{ color: 'var(--cwm-text-muted)' }}>
         {label}
       </p>
 
-      <div className="flex items-center justify-center">
-        <span className="text-[9px] font-bold px-2.5 py-0.5 rounded-full border tracking-wide" style={r.badge}>
+      {/* Footer: badge left, view-details right */}
+      <div className="flex items-center justify-between">
+        <span
+          className="text-[9px] font-bold tracking-widest uppercase flex items-center gap-1"
+          style={{ color: r.badge.color as string }}
+        >
+          <span
+            className="w-1.5 h-1.5 rounded-full inline-block"
+            style={{ background: r.badge.color as string }}
+          />
           {r.label}
         </span>
+        {onClick && (
+          <span
+            className="text-[9px] font-semibold tracking-wide uppercase flex items-center gap-0.5 hover:opacity-80 transition-opacity"
+            style={{ color: 'var(--cwm-text-faint)' }}
+          >
+            VIEW DETAILS <span style={{ color: r.badge.color as string }}>→</span>
+          </span>
+        )}
       </div>
 
+      {/* Sub-values */}
       {subValues && subValues.length > 0 && (
-        <div className="mt-3 pt-2.5 border-t border-white/5 grid grid-cols-2 gap-x-2 gap-y-1">
+        <div className="mt-2.5 pt-2 border-t border-white/5 grid grid-cols-2 gap-x-3 gap-y-1">
           {subValues.map((sv, i) => (
-            <div key={i} className="text-center">
+            <div key={i}>
               <div className="text-[10px] font-semibold" style={{ color: 'var(--cwm-text)' }}>{sv.value}</div>
               <div className="text-[9px]" style={{ color: 'var(--cwm-text-faint)' }}>{sv.label}</div>
             </div>

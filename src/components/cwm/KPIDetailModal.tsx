@@ -1,11 +1,11 @@
 import React, { useState, useMemo } from 'react';
-import { deriveRag } from './CWMKPICard';
+import { deriveRag } from './KPICard';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement,
   LineElement, Tooltip, Filler, Legend,
 } from 'chart.js';
-import { CHART_PALETTES, getChartTokens, chartTooltip, chartScales, getCSSVar } from './chartUtils';
+import { CHART_PALETTES, getChartTokens, chartTooltip, chartScales, getCSSVar } from '../chartUtils';
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Filler, Legend);
 
 /* ─── RAG Helper ──────────────────────────────────────────── */
@@ -240,8 +240,8 @@ export default function CWMKPIDetailModal({ kpi, onClose, showAnalysis = true }:
       {
         label: `${activeTimeRange} Actual`,
         data: actualData,
-        borderColor: CHART_PALETTES.area.cyan.border,
-        backgroundColor: CHART_PALETTES.area.cyan.fill,
+        borderColor: CHART_PALETTES.area.sky.border,
+        backgroundColor: CHART_PALETTES.area.sky.fill,
         fill: true, tension: 0.4, pointRadius: 0, borderWidth: 2.5,
       },
       ...(kpi?.thresholds ? [{

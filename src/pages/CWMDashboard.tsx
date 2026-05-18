@@ -1,8 +1,8 @@
 import React, { useContext, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DataContext } from '../services/socket';
-import KPICard, { IcoCoverage, IcoAlert, IcoRoute, IcoTrash, IcoRecycle, IcoBarChart } from '../components/CWMKPICard';
-import CWMKPIDetailModal, { KPIDetailData } from '../components/CWMKPIDetailModal';
+import KPICard, { IcoCoverage, IcoAlert, IcoRoute, IcoTrash, IcoRecycle, IcoBarChart } from '../components/cwm/KPICard';
+import CWMKPIDetailModal, { KPIDetailData } from '../components/cwm/KPIDetailModal';
 import ZoneFilterBar from '../components/ZoneFilterBar';
 import {
   ChartTimeframeControl, TIMEFRAME_OPTIONS, getTimeframeOption,

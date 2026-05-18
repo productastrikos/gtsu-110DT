@@ -204,15 +204,16 @@ interface EngineDigitalTwinProps {
   showEfficiency?: boolean;
   title?: string;
   modelUrl?: string;
+  hideFullscreenButton?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Status colour palette
 // ─────────────────────────────────────────────────────────────────────────────
 const STATUS_COLORS: Record<StatusLevel, { border: string; text: string; bg: string; glow: string }> = {
-  critical: { border: "#b04040", text: "#e0a0a0", bg: "rgba(176,64,64,0.10)",  glow: "#b04040" },
-  warning:  { border: "#b08010", text: "#d4b060", bg: "rgba(176,128,16,0.10)", glow: "#b08010" },
-  normal:   { border: "#4a7a60", text: "#8ab8a0", bg: "rgba(74,122,96,0.10)",  glow: "#4a7a60" },
+  critical: { border: "rgba(220,38,38,0.45)",  text: "#dc2626", bg: "rgba(220,38,38,0.10)",  glow: "#dc2626" },
+  warning:  { border: "rgba(217,119,6,0.45)",  text: "#d97706", bg: "rgba(217,119,6,0.10)",  glow: "#d97706" },
+  normal:   { border: "rgba(255,255,255,0.10)", text: "#afc3d8", bg: "rgba(255,255,255,0.04)", glow: "transparent" },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -224,19 +225,18 @@ interface HudCardProps {
   unit: string;
   sublabel?: string;
   status: StatusLevel;
-  partLabel?: string;
 }
-function HudCard({ label, value, unit, sublabel, status, partLabel }: HudCardProps) {
+function HudCard({ label, value, unit, sublabel, status }: HudCardProps) {
   const c = STATUS_COLORS[status];
   return (
     <div
       style={{
-        background: "rgba(4,7,18,0.92)",
+        background: "rgba(10,10,10,0.90)",
         border: `1.5px solid ${c.border}`,
         borderRadius: 7,
         padding: "5px 10px",
         minWidth: 110,
-        boxShadow: `0 0 14px ${c.bg}`,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.28)",
         backdropFilter: "blur(8px)",
       }}
     >
@@ -246,16 +246,15 @@ function HudCard({ label, value, unit, sublabel, status, partLabel }: HudCardPro
             width: 6,
             height: 6,
             borderRadius: "50%",
-            background: c.glow,
+            background: c.glow === "transparent" ? "rgba(255,255,255,0.25)" : c.glow,
             display: "inline-block",
-            boxShadow: `0 0 6px ${c.glow}`,
             flexShrink: 0,
           }}
         />
         <span
           style={{
             fontSize: 8,
-            color: "#9ca3af",
+            color: "#8ca0b6",
             textTransform: "uppercase",
             letterSpacing: "0.08em",
             whiteSpace: "nowrap",
@@ -276,30 +275,14 @@ function HudCard({ label, value, unit, sublabel, status, partLabel }: HudCardPro
       >
         {value}
         {unit && (
-          <span style={{ fontSize: 9, fontWeight: 400, marginLeft: 3, color: "#6b7280" }}>
+          <span style={{ fontSize: 9, fontWeight: 400, marginLeft: 3, color: "#8ca0b6" }}>
             {unit}
           </span>
         )}
       </div>
       {sublabel && (
-        <div style={{ fontSize: 8.5, color: "#4b5563", marginTop: 2, whiteSpace: "nowrap" }}>
+        <div style={{ fontSize: 8.5, color: "#8ca0b6", marginTop: 2, whiteSpace: "nowrap" }}>
           {sublabel}
-        </div>
-      )}
-      {partLabel && (
-        <div
-          style={{
-            marginTop: 3,
-            paddingTop: 3,
-            borderTop: `1px solid ${c.border}44`,
-            fontSize: 7.5,
-            color: c.text,
-            opacity: 0.75,
-            whiteSpace: "nowrap",
-            fontFamily: "'Courier New', monospace",
-          }}
-        >
-          ▸ {partLabel}
         </div>
       )}
     </div>
@@ -530,6 +513,7 @@ export function EngineDigitalTwin({
   components: _components = [],
   title = "GTSU-110 Digital Twin",
   modelUrl = "/Starter Asm..glb",
+  hideFullscreenButton = false,
 }: EngineDigitalTwinProps) {
   const {
     telemetry,
@@ -568,7 +552,7 @@ export function EngineDigitalTwin({
 
   useEffect(() => {
     const onFullscreenChange = () => {
-      const isNowFullscreen = document.fullscreenElement === containerRef.current;
+      const isNowFullscreen = !!(document.fullscreenElement && document.fullscreenElement.contains(containerRef.current));
       setIsFullscreen(isNowFullscreen);
       if (!isNowFullscreen) {
         setFullscreenTab("telemetry");
@@ -653,7 +637,7 @@ export function EngineDigitalTwin({
   ];
 
   return (
-    <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-black">
+    <div ref={containerRef} className="w-full h-full relative overflow-hidden" style={{ background: 'var(--cwm-bg)' }}>
 
       {/* ── 3-D Canvas ─────────────────────────────────────────────────────── */}
       <Canvas
@@ -707,7 +691,7 @@ export function EngineDigitalTwin({
         {/* FULLSCREEN CONTROL + TABS */}
         <div
           className="absolute pointer-events-auto"
-          style={{ top: 8, right: 8, display: "flex", gap: 6, zIndex: 40 }}
+          style={{ top: 8, right: 8, display: "flex", gap: 6, zIndex: 40, ...(hideFullscreenButton && !isFullscreen ? { display: "none" } : {}) }}
         >
           {isFullscreen && (
             <div style={{ display: "flex", gap: 4 }}>
@@ -719,9 +703,9 @@ export function EngineDigitalTwin({
                   key={tab.id}
                   onClick={() => setFullscreenTab(tab.id)}
                   style={{
-                    background: fullscreenTab === tab.id ? "rgba(16,185,129,0.22)" : "rgba(4,7,18,0.82)",
-                    border: `1px solid ${fullscreenTab === tab.id ? "#10b981" : "rgba(71,85,105,0.55)"}`,
-                    color: fullscreenTab === tab.id ? "#6ee7b7" : "#9ca3af",
+                    background: fullscreenTab === tab.id ? "rgba(200,200,200,0.10)" : "rgba(10,10,10,0.82)",
+                    border: `1px solid ${fullscreenTab === tab.id ? "rgba(200,200,200,0.20)" : "rgba(255,255,255,0.08)"}`,
+                    color: fullscreenTab === tab.id ? "#e8eef5" : "#8ca0b6",
                     borderRadius: 5,
                     padding: "3px 8px",
                     fontSize: 8,
@@ -735,22 +719,26 @@ export function EngineDigitalTwin({
               ))}
             </div>
           )}
-          <button
-            onClick={toggleFullscreen}
-            style={{
-              background: "rgba(4,7,18,0.82)",
-              border: "1px solid rgba(56,189,248,0.55)",
-              color: "#7dd3fc",
-              borderRadius: 5,
-              padding: "3px 8px",
-              fontSize: 8,
-              letterSpacing: "0.06em",
-              fontFamily: "'Courier New', monospace",
-              cursor: "pointer",
-            }}
-          >
-            {isFullscreen ? "EXIT FULLSCREEN" : "FULLSCREEN"}
-          </button>
+          {!hideFullscreenButton && (
+            <button
+              onClick={toggleFullscreen}
+              style={{
+                background: "#3b7de8",
+                color: "#ffffff",
+                border: "none",
+                padding: "5px 12px",
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: "0.05em",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                boxShadow: "0 2px 10px rgba(59,125,232,0.35)",
+              }}
+            >
+              {isFullscreen ? "Exit Fullscreen" : "Open Full Screen →"}
+            </button>
+          )}
         </div>
 
         {showTelemetryHud && (
@@ -764,7 +752,6 @@ export function EngineDigitalTwin({
             unit="%"
             sublabel={`RUL: ${health.rul} h  ·  ${health.rulCycles} cycles`}
             status={foulingStatus}
-            partLabel="→ Stator · Armature"
           />
         </div>
 
@@ -774,9 +761,8 @@ export function EngineDigitalTwin({
             label="Ngg — Gas Generator"
             value={nggPct.toFixed(1)}
             unit="% Ngg"
-            sublabel={`${telemetry.ngg.toLocaleString()} RPM  ·  max 22 000`}
+            sublabel={`${telemetry.ngg.toLocaleString()} RPM`}
             status={nggStatus}
-            partLabel="→ Stator · Armature · Bearings"
           />
         </div>
 
@@ -786,9 +772,8 @@ export function EngineDigitalTwin({
             label="JPT1 — Combustor"
             value={Math.round(telemetry.jpt1).toString()}
             unit="°C"
-            sublabel={`Limit: ${JPT_GROUND_LIMIT}°C  ·  Δ+${health.residualJpt1.toFixed(1)}°C`}
+            sublabel={`Limit: ${JPT_GROUND_LIMIT}°C`}
             status={jpt1Status}
-            partLabel="→ Commutator · Brushes"
           />
         </div>
 
@@ -798,9 +783,8 @@ export function EngineDigitalTwin({
             label="P2/P1 — Compressor"
             value={telemetry.p2p1.toFixed(2)}
             unit=":1"
-            sublabel={`Base: ${health.baselineP2p1}  ·  Δ${health.residualP2p1.toFixed(2)}`}
+            sublabel={`Base: ${health.baselineP2p1}`}
             status={p2p1Status}
-            partLabel="→ Solenoid / Plunger"
           />
         </div>
 
@@ -810,9 +794,7 @@ export function EngineDigitalTwin({
             label="Fuel Flow — Stepper"
             value={telemetry.fuelMassFlow.toFixed(2)}
             unit="kg/h"
-            sublabel={`Pos: ${telemetry.stepperPosition} steps  ·  3-phase`}
             status={fuelStatus}
-            partLabel="→ Drive Gear / Pinion"
           />
         </div>
 
@@ -824,7 +806,6 @@ export function EngineDigitalTwin({
             unit=""
             sublabel={ipsLabels[telemetry.ipsMode]}
             status={secuStatus}
-            partLabel="→ Housing · End Bells"
           />
         </div>
 
@@ -832,8 +813,8 @@ export function EngineDigitalTwin({
         <div className="absolute top-3 left-1/2 -translate-x-1/2">
           <div
             style={{
-              background: "rgba(4,7,18,0.82)",
-              border: "1px solid rgba(99,102,241,0.40)",
+              background: "rgba(10,10,10,0.82)",
+              border: "1px solid rgba(255,255,255,0.08)",
               borderRadius: 6,
               padding: "3px 12px",
               backdropFilter: "blur(8px)",
@@ -844,7 +825,7 @@ export function EngineDigitalTwin({
               <span
                 style={{
                   fontSize: 9,
-                  color: "#a5b4fc",
+                  color: "#afc3d8",
                   letterSpacing: "0.09em",
                   fontFamily: "'Courier New', monospace",
                   whiteSpace: "nowrap",
@@ -869,9 +850,9 @@ export function EngineDigitalTwin({
               key={label}
               onClick={toggle}
               style={{
-                background: active ? "rgba(99,102,241,0.28)" : "rgba(4,7,18,0.82)",
-                border: `1px solid ${active ? "#6366f1" : "rgba(71,85,105,0.55)"}`,
-                color: active ? "#a5b4fc" : "#9ca3af",
+                background: active ? "rgba(200,200,200,0.10)" : "rgba(10,10,10,0.82)",
+                border: `1px solid ${active ? "rgba(200,200,200,0.20)" : "rgba(255,255,255,0.08)"}`,
+                color: active ? "#e8eef5" : "#8ca0b6",
                 borderRadius: 5,
                 padding: "3px 11px",
                 fontSize: 9,
@@ -911,8 +892,8 @@ export function EngineDigitalTwin({
                   display: "flex",
                   alignItems: "center",
                   gap: 3,
-                  background: isSel ? "rgba(59,130,246,0.18)" : "rgba(4,7,18,0.75)",
-                  border: `1px solid ${isSel ? "#3b82f6" : col.border + "55"}`,
+                  background: isSel ? "rgba(200,200,200,0.10)" : "rgba(10,10,10,0.75)",
+                  border: `1px solid ${isSel ? "rgba(200,200,200,0.25)" : "rgba(255,255,255,0.07)"}`,
                   borderRadius: 4,
                   padding: "2px 5px",
                   backdropFilter: "blur(4px)",
@@ -926,14 +907,13 @@ export function EngineDigitalTwin({
                     background: swatch,
                     display: "inline-block",
                     border: `1px solid ${col.border}`,
-                    boxShadow: st !== "normal" ? `0 0 5px ${col.glow}` : "none",
                     flexShrink: 0,
                   }}
                 />
                 <span
                   style={{
                     fontSize: 7,
-                    color: isSel ? "#93c5fd" : col.text,
+                    color: isSel ? "#e8eef5" : "#8ca0b6",
                     fontFamily: "'Courier New', monospace",
                     whiteSpace: "nowrap",
                     letterSpacing: "0.04em",
@@ -950,8 +930,8 @@ export function EngineDigitalTwin({
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2">
           <div
             style={{
-              background: "rgba(4,7,18,0.80)",
-              border: "1px solid rgba(71,85,105,0.45)",
+              background: "rgba(10,10,10,0.80)",
+              border: "1px solid rgba(255,255,255,0.07)",
               borderRadius: 6,
               padding: "3px 12px",
               backdropFilter: "blur(8px)",
@@ -960,7 +940,7 @@ export function EngineDigitalTwin({
             <span
               style={{
                 fontSize: 9,
-                color: "#6b7280",
+                color: "#8ca0b6",
                 fontFamily: "'Courier New', monospace",
                 whiteSpace: "nowrap",
               }}
@@ -983,23 +963,23 @@ export function EngineDigitalTwin({
       >
         <div
           style={{
-            background: "rgba(4,7,18,0.90)",
-            border: "1px solid rgba(56,189,248,0.45)",
+            background: "rgba(10,10,10,0.90)",
+            border: "1px solid rgba(255,255,255,0.08)",
             borderRadius: 8,
             padding: "10px 12px",
             backdropFilter: "blur(9px)",
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 10, color: "#7dd3fc", letterSpacing: "0.08em", fontFamily: "'Courier New', monospace" }}>
+            <span style={{ fontSize: 10, color: "#afc3d8", letterSpacing: "0.08em", fontFamily: "'Courier New', monospace" }}>
               TEST BENCH SIMULATION
             </span>
-            <span style={{ fontSize: 9, color: "#94a3b8", fontFamily: "'Courier New', monospace" }}>
+            <span style={{ fontSize: 9, color: "#8ca0b6", fontFamily: "'Courier New', monospace" }}>
               {simulation.elapsedSec}s / {simulation.durationSec}s · {phaseLabel}
             </span>
           </div>
 
-          <div style={{ height: 6, borderRadius: 999, background: "rgba(30,41,59,0.9)", marginTop: 8, overflow: "hidden" }}>
+          <div style={{ height: 6, borderRadius: 999, background: "rgba(255,255,255,0.07)", marginTop: 8, overflow: "hidden" }}>
             <div
               style={{
                 width: `${progressPct}%`,
@@ -1018,17 +998,17 @@ export function EngineDigitalTwin({
           </div>
 
           <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }}>
-            <div style={{ background: "rgba(2,6,23,0.8)", border: "1px solid rgba(100,116,139,0.35)", borderRadius: 4, padding: "4px 6px" }}>
-              <div style={{ fontSize: 8, color: "#64748b" }}>Peak JPT1 Δ</div>
-              <div style={{ fontSize: 10, color: peakDelta <= 0 ? "#4ade80" : "#f87171", fontWeight: 700 }}>{peakDelta > 0 ? "+" : ""}{peakDelta.toFixed(1)}°C</div>
+            <div style={{ background: "rgba(10,10,10,0.80)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "4px 6px" }}>
+              <div style={{ fontSize: 8, color: "#8ca0b6" }}>Peak JPT1 Δ</div>
+              <div style={{ fontSize: 10, color: peakDelta <= 0 ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{peakDelta > 0 ? "+" : ""}{peakDelta.toFixed(1)}°C</div>
             </div>
-            <div style={{ background: "rgba(2,6,23,0.8)", border: "1px solid rgba(100,116,139,0.35)", borderRadius: 4, padding: "4px 6px" }}>
-              <div style={{ fontSize: 8, color: "#64748b" }}>Max Ngg Δ</div>
-              <div style={{ fontSize: 10, color: nggDelta >= 0 ? "#4ade80" : "#f87171", fontWeight: 700 }}>{nggDelta > 0 ? "+" : ""}{nggDelta.toFixed(1)}%</div>
+            <div style={{ background: "rgba(10,10,10,0.80)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "4px 6px" }}>
+              <div style={{ fontSize: 8, color: "#8ca0b6" }}>Max Ngg Δ</div>
+              <div style={{ fontSize: 10, color: nggDelta >= 0 ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{nggDelta > 0 ? "+" : ""}{nggDelta.toFixed(1)}%</div>
             </div>
-            <div style={{ background: "rgba(2,6,23,0.8)", border: "1px solid rgba(100,116,139,0.35)", borderRadius: 4, padding: "4px 6px" }}>
-              <div style={{ fontSize: 8, color: "#64748b" }}>Time Sustain Δ</div>
-              <div style={{ fontSize: 10, color: sustainDelta <= 0 ? "#4ade80" : "#f87171", fontWeight: 700 }}>{sustainDelta > 0 ? "+" : ""}{sustainDelta.toFixed(1)}s</div>
+            <div style={{ background: "rgba(10,10,10,0.80)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "4px 6px" }}>
+              <div style={{ fontSize: 8, color: "#8ca0b6" }}>Time Sustain Δ</div>
+              <div style={{ fontSize: 10, color: sustainDelta <= 0 ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{sustainDelta > 0 ? "+" : ""}{sustainDelta.toFixed(1)}s</div>
             </div>
           </div>
         </div>
@@ -1043,13 +1023,13 @@ export function EngineDigitalTwin({
             bottom: 72,
             left: "50%",
             transform: "translateX(-50%)",
-            background: "rgba(4,7,18,0.96)",
+            background: "rgba(10,10,10,0.96)",
             border: `1.5px solid ${STATUS_COLORS[tooltipStatus].border}`,
             borderRadius: 8,
             padding: "8px 14px",
             maxWidth: 360,
             backdropFilter: "blur(12px)",
-            boxShadow: `0 0 24px ${STATUS_COLORS[tooltipStatus].bg}`,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.40)",
             zIndex: 30,
           }}
         >
@@ -1078,15 +1058,15 @@ export function EngineDigitalTwin({
             >
               {tooltip.label}
             </span>
-            <span style={{ fontSize: 8, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            <span style={{ fontSize: 8, color: "#8ca0b6", textTransform: "uppercase", letterSpacing: "0.06em" }}>
               {tooltipStatus}{selected?.id === tooltip.id ? " · LOCKED" : ""}
             </span>
           </div>
-          <div style={{ fontSize: 9, color: "#9ca3af", lineHeight: 1.6 }}>
+          <div style={{ fontSize: 9, color: "#afc3d8", lineHeight: 1.6 }}>
             {tooltip.description}
           </div>
           {selected?.id !== tooltip.id && (
-            <div style={{ marginTop: 5, fontSize: 8, color: "#4b5563", fontFamily: "'Courier New', monospace" }}>
+            <div style={{ marginTop: 5, fontSize: 8, color: "#8ca0b6", fontFamily: "'Courier New', monospace" }}>
               Click to lock selection
             </div>
           )}

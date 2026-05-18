@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useData } from '../services/socket';
-import { useGTSUStore } from '../store/useGTSUStore';
-import AlertPanel from './AlertPanel';
-import AdvisoryPanel from './AdvisoryPanel';
+import { useData } from '../../services/socket';
+import { useGTSUStore } from '../../store/useGTSUStore';
+import AlertPanel from '../AlertPanel';
+import AdvisoryPanel from '../AdvisoryPanel';
 
 /* ─── Navigation structure ─────────────────────────────── */
 const NAV_SECTIONS = [
@@ -445,56 +445,6 @@ export default function Layout({ children, user, onLogout, theme = 'dark', onThe
             )}
           </div>
         </header>
-
-        {/* ── MISSION STATUS BAR ───────────────────────────────── */}
-        <div className="shrink-0 flex items-center gap-0 px-4 border-b border-cwm-border overflow-x-auto"
-             style={{ height: 28, background: 'var(--cwm-panel)', fontSize: 10, letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
-
-          {/* Asset ID */}
-          <span className="mr-2 pr-2" style={{ color: 'var(--cwm-text-faint)', borderRight: '1px solid var(--cwm-border-soft)' }}>GTSU-110 · SN-0312</span>
-
-          {/* Readiness pill */}
-          <span className="px-1.5 py-0 rounded border text-[9px] font-bold tracking-widest mr-3" style={readinessInlineStyle}>
-            {readiness}
-          </span>
-
-          {/* Mode / Phase */}
-          <span className="mr-3" style={{ color: 'var(--cwm-text-muted)' }}>{phaseLabel}</span>
-
-          {/* Health readiness % */}
-          <span className="mr-1" style={{ color: 'var(--cwm-text-faint)' }}>HLTH</span>
-          <span className="mr-3 font-mono" style={{ color: readinessNum < 75 ? 'var(--cwm-danger)' : readinessNum < 85 ? 'var(--cwm-warning)' : 'var(--cwm-success)' }}>
-            {readinessNum.toFixed(0)}%
-          </span>
-
-          {/* SECU status */}
-          <span className="mr-1" style={{ color: 'var(--cwm-text-faint)' }}>SECU</span>
-          <span className="mr-3 font-bold" style={{ color: secuOk ? 'var(--cwm-success)' : 'var(--cwm-danger)' }}>{secuOk ? 'OK' : 'FLT'}</span>
-
-          {/* Data quality */}
-          <span className="mr-1" style={{ color: 'var(--cwm-text-faint)' }}>DQ</span>
-          <span className="mr-3 font-mono" style={{ color: dqPct < 80 ? 'var(--cwm-danger)' : dqPct < 95 ? 'var(--cwm-warning)' : 'var(--cwm-text-muted)' }}>
-            {dqPct.toFixed(0)}%
-          </span>
-
-          {/* Active faults count */}
-          {activeFaults && activeFaults.filter(f => f.status !== 'resolved').length > 0 && (
-            <>
-              <span className="mr-1" style={{ color: 'var(--cwm-text-faint)' }}>FAULTS</span>
-              <span className="mr-3 font-bold" style={{ color: hasCritical ? 'var(--cwm-danger)' : 'var(--cwm-warning)' }}>
-                {activeFaults.filter(f => f.status !== 'resolved').length}
-              </span>
-            </>
-          )}
-
-          {/* Separator + sim indicator */}
-          {extSim?.isRunning && (
-            <span className="px-1.5 py-0 rounded border text-[9px] font-bold tracking-wider ml-1"
-              style={{ color: 'var(--cwm-info)', borderColor: 'var(--cwm-info-border)', background: 'var(--cwm-info-bg)' }}>
-              SIM RUNNING
-            </span>
-          )}
-        </div>
 
         {/* ── CONTENT + PANELS ──────────────────────────────────── */}
         <div className="flex-1 flex overflow-hidden">

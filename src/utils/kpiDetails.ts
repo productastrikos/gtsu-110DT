@@ -5,6 +5,7 @@ export interface KPIDetail {
   value: string | number;
   unit?: string;
   description: string;
+  status?: string;
   factors: {
     name: string;
     impact: number;

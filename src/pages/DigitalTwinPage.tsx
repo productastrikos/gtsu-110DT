@@ -144,7 +144,7 @@ export default function DigitalTwinPage() {
   const [showFaults, setShowFaults]     = useState(true);
   const [selectedComp, setSelectedComp] = useState<string | null>(null);
 
-  const overlays = mapComponentOverlays(telemetry, activeFaults, physicsBaseline);
+  const overlays = mapComponentOverlays(activeFaults, telemetry.jpt1, telemetry.nggPct, telemetry.p2p1);
 
   const componentStatuses: Record<string, 'normal' | 'warning' | 'critical'> = {};
   overlays.forEach(o => { componentStatuses[o.componentId] = o.severity; });
@@ -179,7 +179,7 @@ export default function DigitalTwinPage() {
               <button
                 key={id}
                 onClick={() => handleComponentClick(id)}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-800/50 transition-colors ${selectedComp === id ? 'bg-gray-800/70 border-l-2 border-blue-500' : 'border-l-2 border-transparent'}`}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-800/50 transition-colors ${selectedComp === id ? 'bg-gray-800/70 border-l-2 border-white/40' : 'border-l-2 border-transparent'}`}
               >
                 <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
                 <span className="text-xs text-gray-300 truncate">{info.name}</span>
