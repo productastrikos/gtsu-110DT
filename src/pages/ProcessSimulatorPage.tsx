@@ -203,7 +203,7 @@ export default function ProcessSimulatorPage() {
         {dbMode && loadedBackendFlight && (
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 11, color: '#86efac', letterSpacing: '0.05em' }}>
-              ● {loadedBackendFlight.meta.label} · {loadedBackendFlight.meta.n_cycles} cycles · {loadedBackendFlight.meta.duration_hrs.toFixed(1)} hrs
+              ● {loadedBackendFlight.meta.flight_label} · {loadedBackendFlight.meta.total_start_cycles} cycles · {loadedBackendFlight.meta.duration_hrs.toFixed(1)} hrs
             </span>
           </div>
         )}

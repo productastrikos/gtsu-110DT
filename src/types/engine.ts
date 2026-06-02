@@ -293,56 +293,56 @@ export interface SandboxRun {
 
 /** Flight metadata row from /api/flights */
 export interface BackendFlight {
-  id:              number;
-  label:           string;    // e.g. "Flight 003"
-  duration_hrs:    number;
-  n_cycles:        number;
-  date:            string;    // "2026-03-15"
-  success_rate:    number;    // 0-100
-  faulty_cycles:   number;
-  avg_jpt1:        number;    // °C
-  total_fuel_kg:   number;
-  total_trace_sec: number;
+  id:                       number;
+  flight_label:             string;    // e.g. "Flight 003"
+  duration_hrs:             number;
+  total_start_cycles:       number;
+  date:                     string;    // "2026-03-15"
+  success_rate_pct:         number;    // 0-100
+  faulty_cycle_count:       number;
+  avg_peak_jpt1_degC:       number;    // °C
+  total_fuel_kg:            number;
+  total_trace_duration_sec: number;
 }
 
 /** Cycle summary row from /api/flights/{id} */
 export interface BackendCycle {
-  id:            number;
-  flight_id:     number;
-  cycle_num:     number;
-  flight_hour:   number;
-  status:        CycleStatus;
-  fault_reason:  string;
-  improvement:   string;
-  duration_sec:  number;
-  peak_jpt1:     number;
-  max_ngg_pct:   number;
-  total_fuel_kg: number;
-  start_ts:      number;    // seconds from flight start
-  end_ts:        number;
+  id:                      number;
+  flight_id:               number;
+  cycle_number:            number;
+  flight_hour_elapsed:     number;
+  cycle_status:            CycleStatus;
+  fault_type:              string;
+  corrective_action:       string;
+  duration_sec:            number;
+  peak_jet_pipe_temp_degC: number;
+  max_gas_gen_speed_pct:   number;
+  fuel_consumed_kg:        number;
+  cycle_start_sec:         number;    // seconds from flight start
+  cycle_end_sec:           number;
 }
 
 /** 1-Hz trace row from /api/flights/{id}/trace */
 export interface TraceRow {
-  id:            number;
-  flight_id:     number;
-  cycle_num:     number;
-  ts:            number;    // absolute seconds from flight start
-  phase:         string;
-  jpt1:          number;
-  ngg_rpm:       number;
-  ngg_pct:       number;
-  p2p1:          number;
-  oat:           number;
-  stepper_pos:   number;
-  fuel_flow_kgh: number;
-  vibration:     number;
-  secu_healthy:  number;   // 0 | 1
-  bit_pass:      number;   // 0 | 1
-  mil_bus_word:  string;   // e.g. "0x0000"
-  status:        CycleStatus;
-  fault_reason:  string;
-  flight_hour:   number;
+  id:                        number;
+  flight_id:                 number;
+  cycle_number:              number;
+  elapsed_time_sec:          number;   // absolute seconds from flight start
+  start_phase:               string;
+  jet_pipe_temp_degC:        number;
+  gas_gen_speed_rpm:         number;
+  gas_gen_speed_pct:         number;
+  compressor_pressure_ratio: number;
+  ambient_temp_degC:         number;
+  fuel_valve_steps:          number;
+  fuel_flow_kg_per_hr:       number;
+  vibration_mm_per_sec:      number;
+  secu_processor_ok:         number;  // 0 | 1
+  built_in_test_pass:        number;  // 0 | 1
+  mil_1553b_status_word:     string;  // e.g. "0x0000"
+  cycle_status:              CycleStatus;
+  fault_type:                string;
+  flight_hour_elapsed:       number;
 }
 
 /** Fully loaded flight (metadata + cycles + trace) held in the store */

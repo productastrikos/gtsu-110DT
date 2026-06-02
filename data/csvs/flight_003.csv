@@ -1,4 +1,4 @@
-flight_id,cycle_num,ts,phase,jpt1,ngg_rpm,ngg_pct,p2p1,oat,stepper_pos,fuel_flow_kgh,vibration,secu_healthy,bit_pass,mil_bus_word,status,fault_reason,flight_hour
+flight_id,cycle_number,elapsed_time_sec,start_phase,jet_pipe_temp_degC,gas_gen_speed_rpm,gas_gen_speed_pct,compressor_pressure_ratio,ambient_temp_degC,fuel_valve_steps,fuel_flow_kg_per_hr,vibration_mm_per_sec,secu_processor_ok,built_in_test_pass,mil_1553b_status_word,cycle_status,fault_type,flight_hour_elapsed
 3,1,0.0,cranking,180.3,57,0.26,1.0,6.2,0,0.024,0.265,1,1,0x0000,success,,0.0
 3,1,1.0,cranking,168.3,0,0.0,1.0,5.7,0,0.0,0.038,1,1,0x0000,success,,0.0
 3,1,2.0,cranking,187.7,185,0.84,1.0,5.9,1,0.019,0.277,1,1,0x0000,success,,0.0

@@ -53,12 +53,16 @@ export const getWeather = () => api.get('/weather');
 export const getZones = () => api.get('/zones');
 
 // ─── Flight Database (FastAPI backend on port 8000) ──────────────────────────
+// Always target localhost — backend is always co-located with the dev machine.
+// The Vite dev server also proxies /flight-api → http://127.0.0.1:8000 as a
+// fallback when the app is accessed via a LAN IP.
 
-import type { BackendFlight, BackendCycle, TraceRow } from '../types/engine';
+import type {
+  BackendFlight, BackendCycle, TraceRow,
+  FlightRecord,
+} from '../types/engine';
 
-const FLIGHT_DB = typeof window !== 'undefined'
-  ? `${window.location.protocol}//${window.location.hostname}:8000/api`
-  : 'http://localhost:8000/api';
+const FLIGHT_DB = 'http://localhost:8000/api';
 
 const flightApi = axios.create({ baseURL: FLIGHT_DB, timeout: 30000 });
 
@@ -77,5 +81,63 @@ export const getFlightTrace = (id: number) =>
 /** Check backend reachability. */
 export const pingFlightDB = () =>
   flightApi.get<{ status: string }>('/health', { timeout: 3000 });
+
+/**
+ * Save a locally-simulated FlightRecord to the backend.
+ * Converts the frontend camelCase structure to the backend snake_case schema.
+ * Returns the created BackendFlight on success.
+ */
+export const saveFlightToBackend = (flight: FlightRecord): Promise<{ data: BackendFlight }> => {
+  let cumulativeSec = 0;
+
+  const payload = {
+    flight_label: `Sim-${new Date().toISOString().slice(0, 10)}-${flight.id.slice(-6)}`,
+    duration_hrs: flight.durationHrs,
+    date:         new Date().toISOString().slice(0, 10),
+    cycles: flight.cycles.map(c => {
+      const cycleStart = cumulativeSec;
+      const cycleEnd   = cumulativeSec + c.durationSec;
+      cumulativeSec    = cycleEnd;
+
+      return {
+        cycle_number:             c.cycleNumber,
+        flight_hour_elapsed:      c.flightHour,
+        cycle_status:             c.status,
+        fault_type:               c.faultReason ?? '',
+        corrective_action:        c.improvement ?? '',
+        duration_sec:             c.durationSec,
+        peak_jet_pipe_temp_degC:  c.peakJpt1,
+        max_gas_gen_speed_pct:    c.maxNggPct,
+        fuel_consumed_kg:         c.fuelUsedKg,
+        cycle_start_sec:          cycleStart,
+        cycle_end_sec:            cycleEnd,
+        trace: c.trace.map(s => ({
+          elapsed_time_sec:          cycleStart + s.t,
+          start_phase:               s.phase as string,
+          jet_pipe_temp_degC:        s.jpt1,
+          gas_gen_speed_rpm:         s.ngg,
+          gas_gen_speed_pct:         s.nggPct,
+          compressor_pressure_ratio: s.p2p1,
+          ambient_temp_degC:         s.oat,
+          fuel_valve_steps:          s.stepperPos,
+          fuel_flow_kg_per_hr:       s.fuelFlow,
+          vibration_mm_per_sec:      s.vibration,
+          secu_processor_ok:         s.secuHealthy ? 1 : 0,
+          built_in_test_pass:        s.bitPass ? 1 : 0,
+          mil_1553b_status_word:     `0x${s.milBusWord.toString(16).toUpperCase().padStart(4, '0')}`,
+          cycle_status:              c.status,
+          fault_type:                c.faultReason ?? '',
+          flight_hour_elapsed:       c.flightHour,
+        })),
+      };
+    }),
+  };
+
+  return flightApi.post<BackendFlight>('/flights', payload, { timeout: 60000 });
+};
+
+/** Delete a stored flight from the backend. */
+export const deleteBackendFlight = (id: number) =>
+  flightApi.delete(`/flights/${id}`);
 
 export default api;

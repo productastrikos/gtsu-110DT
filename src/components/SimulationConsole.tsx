@@ -24,19 +24,19 @@ interface Props {
 // ── Type converter: TraceRow → CycleTraceSample ──────────────────────────────
 export function traceRowToFrame(row: TraceRow): CycleTraceSample {
   return {
-    t:           row.ts,
-    jpt1:        row.jpt1,
-    ngg:         row.ngg_rpm,
-    nggPct:      row.ngg_pct,
-    p2p1:        row.p2p1,
-    fuelFlow:    row.fuel_flow_kgh,
-    stepperPos:  row.stepper_pos,
-    vibration:   row.vibration,
-    oat:         row.oat,
-    secuHealthy: row.secu_healthy === 1,
-    bitPass:     row.bit_pass === 1,
-    milBusWord:  parseInt(row.mil_bus_word, 16) || 0,
-    phase:       row.phase as CycleTraceSample['phase'],
+    t:           row.elapsed_time_sec,
+    jpt1:        row.jet_pipe_temp_degC,
+    ngg:         row.gas_gen_speed_rpm,
+    nggPct:      row.gas_gen_speed_pct,
+    p2p1:        row.compressor_pressure_ratio,
+    fuelFlow:    row.fuel_flow_kg_per_hr,
+    stepperPos:  row.fuel_valve_steps,
+    vibration:   row.vibration_mm_per_sec,
+    oat:         row.ambient_temp_degC,
+    secuHealthy: row.secu_processor_ok === 1,
+    bitPass:     row.built_in_test_pass === 1,
+    milBusWord:  parseInt(row.mil_1553b_status_word, 16) || 0,
+    phase:       row.start_phase as CycleTraceSample['phase'],
   };
 }
 
@@ -68,13 +68,13 @@ function statusBg(st: string): string {
   return 'rgba(239,68,68,0.12)';
 }
 
-/** Binary search: last TraceRow with ts <= target. Returns null if trace empty. */
+/** Binary search: last TraceRow with elapsed_time_sec <= target. Returns null if trace empty. */
 function findRow(trace: TraceRow[], target: number): TraceRow | null {
   if (!trace.length) return null;
   let lo = 0, hi = trace.length - 1;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
-    if (trace[mid].ts <= target) lo = mid; else hi = mid - 1;
+    if (trace[mid].elapsed_time_sec <= target) lo = mid; else hi = mid - 1;
   }
   return trace[lo];
 }
@@ -100,17 +100,17 @@ function buildPhaseSegs(
   const segs: PhaseSeg[] = [];
   if (!rows.length) return segs;
 
-  let segPhase = rows[0].phase;
-  let segStart = rows[0].ts;
+  let segPhase = rows[0].start_phase;
+  let segStart = rows[0].elapsed_time_sec;
 
   for (let i = 1; i <= rows.length; i++) {
     const row = rows[i];
-    const flushTs = row ? row.ts : endTs;
-    if (!row || row.phase !== segPhase) {
+    const flushTs = row ? row.elapsed_time_sec : endTs;
+    if (!row || row.start_phase !== segPhase) {
       const startPct = Math.max(0, ((segStart - startTs) / dur) * 100);
       const widthPct = Math.max(0, ((flushTs  - segStart) / dur) * 100);
       if (widthPct > 0) segs.push({ phase: segPhase, startPct, widthPct });
-      if (row) { segPhase = row.phase; segStart = row.ts; }
+      if (row) { segPhase = row.start_phase; segStart = row.elapsed_time_sec; }
     }
   }
   return segs;
@@ -188,8 +188,8 @@ export default function SimulationConsole({ onFrameChange }: Props) {
       if (!cycle) { pauseConsole(); return; }
 
       const next = consoleSecRef.current + delta * speedRef.current;
-      if (next >= cycle.end_ts) {
-        setConsoleSec(cycle.end_ts);
+      if (next >= cycle.cycle_end_sec) {
+        setConsoleSec(cycle.cycle_end_sec);
         pauseConsole();
       } else {
         setConsoleSec(next);
@@ -215,7 +215,7 @@ export default function SimulationConsole({ onFrameChange }: Props) {
     if (!cycles[idx]) return;
     pauseConsole();
     setActiveCycleIdx(idx);
-    setConsoleSec(cycles[idx].start_ts);
+    setConsoleSec(cycles[idx].cycle_start_sec);
   }, [cycles, pauseConsole, setConsoleSec]);
 
   // ── Empty / loading state ──────────────────────────────────────────────
@@ -236,18 +236,18 @@ export default function SimulationConsole({ onFrameChange }: Props) {
   }
 
   // ── Derived render values ─────────────────────────────────────────────
-  const cycleDuration = activeCycle ? activeCycle.end_ts - activeCycle.start_ts : 1;
+  const cycleDuration = activeCycle ? activeCycle.cycle_end_sec - activeCycle.cycle_start_sec : 1;
   const cycleElapsed  = activeCycle
-    ? Math.max(0, Math.min(cycleDuration, consoleSec - activeCycle.start_ts))
+    ? Math.max(0, Math.min(cycleDuration, consoleSec - activeCycle.cycle_start_sec))
     : 0;
   const progressPct = Math.min(100, (cycleElapsed / cycleDuration) * 100);
   const currentRow  = findRow(trace, consoleSec);
 
   const cycleTrace = activeCycle
-    ? trace.filter(r => r.ts >= activeCycle.start_ts && r.ts <= activeCycle.end_ts)
+    ? trace.filter(r => r.elapsed_time_sec >= activeCycle.cycle_start_sec && r.elapsed_time_sec <= activeCycle.cycle_end_sec)
     : [];
   const phaseSegs = activeCycle
-    ? buildPhaseSegs(cycleTrace, activeCycle.start_ts, activeCycle.end_ts)
+    ? buildPhaseSegs(cycleTrace, activeCycle.cycle_start_sec, activeCycle.cycle_end_sec)
     : [];
 
   return (
@@ -255,18 +255,18 @@ export default function SimulationConsole({ onFrameChange }: Props) {
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div style={S.header}>
-        <span style={S.flightLabel}>{meta!.label}</span>
+        <span style={S.flightLabel}>{meta!.flight_label}</span>
         <span style={S.dimText}>{meta!.date}</span>
-        <span style={S.dimText}>{meta!.n_cycles} starter cycles</span>
+        <span style={S.dimText}>{meta!.total_start_cycles} starter cycles</span>
         <span style={{
           ...S.badge,
-          background: meta!.success_rate >= 80 ? '#166534' : '#7f1d1d',
+          background: meta!.success_rate_pct >= 80 ? '#166534' : '#7f1d1d',
         }}>
-          {meta!.success_rate.toFixed(0)}% SUCCESS
+          {meta!.success_rate_pct.toFixed(0)}% SUCCESS
         </span>
-        {meta!.faulty_cycles > 0 && (
+        {meta!.faulty_cycle_count > 0 && (
           <span style={{ ...S.badge, background: '#7c2d12' }}>
-            ⚠ {meta!.faulty_cycles} FAULTS
+            ⚠ {meta!.faulty_cycle_count} FAULTS
           </span>
         )}
       </div>
@@ -275,25 +275,25 @@ export default function SimulationConsole({ onFrameChange }: Props) {
       <div style={S.cycleStrip}>
         {cycles.map((c, i) => {
           const isActive = i === activeCycleIdx;
-          const col      = statusColor(c.status);
+          const col      = statusColor(c.cycle_status);
           return (
             <button
               key={c.id}
               style={{
                 ...S.cycleCard,
                 borderColor: isActive ? col : 'transparent',
-                background:  isActive ? statusBg(c.status) : 'rgba(255,255,255,0.03)',
+                background:  isActive ? statusBg(c.cycle_status) : 'rgba(255,255,255,0.03)',
                 boxShadow:   isActive ? `0 0 0 1px ${col}` : 'none',
               }}
               onClick={() => selectCycle(i)}
-              title={`Cycle ${c.cycle_num} · ${c.status}${c.fault_reason ? ' · ' + c.fault_reason : ''}`}
+              title={`Cycle ${c.cycle_number} · ${c.cycle_status}${c.fault_type ? ' · ' + c.fault_type : ''}`}
             >
-              <span style={{ fontSize: 10, color: '#6e7681' }}>#{c.cycle_num}</span>
+              <span style={{ fontSize: 10, color: '#6e7681' }}>#{c.cycle_number}</span>
               <span style={{ fontSize: 9, color: col, fontWeight: 700, letterSpacing: '0.04em' }}>
-                {c.status.slice(0, 4).toUpperCase()}
+                {c.cycle_status.slice(0, 4).toUpperCase()}
               </span>
               <span style={{ fontSize: 9, color: '#484f58' }}>
-                {fmtSec(c.end_ts - c.start_ts)}
+                {fmtSec(c.cycle_end_sec - c.cycle_start_sec)}
               </span>
             </button>
           );
@@ -343,8 +343,8 @@ export default function SimulationConsole({ onFrameChange }: Props) {
             top: 0, bottom: 0, left: 0,
             width:      `${progressPct}%`,
             background: `linear-gradient(90deg,
-              ${statusColor(activeCycle.status)}99 0%,
-              ${statusColor(activeCycle.status)}33 100%)`,
+              ${statusColor(activeCycle.cycle_status)}99 0%,
+              ${statusColor(activeCycle.cycle_status)}33 100%)`,
             transition: 'width 55ms linear',
             pointerEvents: 'none',
           }} />
@@ -368,7 +368,7 @@ export default function SimulationConsole({ onFrameChange }: Props) {
               if (!activeCycle) return;
               const rect = e.currentTarget.getBoundingClientRect();
               const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-              setConsoleSec(activeCycle.start_ts + frac * cycleDuration);
+              setConsoleSec(activeCycle.cycle_start_sec + frac * cycleDuration);
             }}
           />
 
@@ -442,12 +442,12 @@ export default function SimulationConsole({ onFrameChange }: Props) {
       <div style={S.statusRow}>
         {activeCycle && (
           <>
-            <span style={{ color: statusColor(activeCycle.status), fontWeight: 700, fontSize: 12 }}>
-              ● {activeCycle.status.toUpperCase()}
+            <span style={{ color: statusColor(activeCycle.cycle_status), fontWeight: 700, fontSize: 12 }}>
+              ● {activeCycle.cycle_status.toUpperCase()}
             </span>
-            <Chip>CYCLE {activeCycle.cycle_num}</Chip>
-            {activeCycle.fault_reason && (
-              <Chip color="#f97316">⚠ {activeCycle.fault_reason}</Chip>
+            <Chip>CYCLE {activeCycle.cycle_number}</Chip>
+            {activeCycle.fault_type && (
+              <Chip color="#f97316">⚠ {activeCycle.fault_type}</Chip>
             )}
           </>
         )}
@@ -455,22 +455,22 @@ export default function SimulationConsole({ onFrameChange }: Props) {
         {currentRow && (
           <>
             <Chip
-              color={PHASE_COLOR[currentRow.phase] ?? '#9ca3af'}
-              bg={(PHASE_COLOR[currentRow.phase] ?? '#1f2937') + '33'}
+              color={PHASE_COLOR[currentRow.start_phase] ?? '#9ca3af'}
+              bg={(PHASE_COLOR[currentRow.start_phase] ?? '#1f2937') + '33'}
             >
-              {currentRow.phase.toUpperCase()}
+              {currentRow.start_phase.toUpperCase()}
             </Chip>
-            <Chip>JPT1 {currentRow.jpt1.toFixed(0)} °C</Chip>
-            <Chip>Ngg {currentRow.ngg_pct.toFixed(1)} %</Chip>
-            <Chip>P2/P1 {currentRow.p2p1.toFixed(2)}</Chip>
-            <Chip>OAT {currentRow.oat.toFixed(0)} °C</Chip>
-            {currentRow.vibration > 5 && (
-              <Chip color="#f97316">VIB {currentRow.vibration.toFixed(1)} mm/s</Chip>
+            <Chip>JPT1 {currentRow.jet_pipe_temp_degC.toFixed(0)} °C</Chip>
+            <Chip>Ngg {currentRow.gas_gen_speed_pct.toFixed(1)} %</Chip>
+            <Chip>P2/P1 {currentRow.compressor_pressure_ratio.toFixed(2)}</Chip>
+            <Chip>OAT {currentRow.ambient_temp_degC.toFixed(0)} °C</Chip>
+            {currentRow.vibration_mm_per_sec > 5 && (
+              <Chip color="#f97316">VIB {currentRow.vibration_mm_per_sec.toFixed(1)} mm/s</Chip>
             )}
           </>
         )}
 
-        {activeCycle?.improvement && (
+        {activeCycle?.corrective_action && (
           <span
             style={{
               padding: '1px 8px', background: 'rgba(255,255,255,0.06)',
@@ -478,9 +478,9 @@ export default function SimulationConsole({ onFrameChange }: Props) {
               maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis',
               whiteSpace: 'nowrap', fontFamily: 'ui-monospace,"Courier New",monospace',
             }}
-            title={activeCycle.improvement}
+            title={activeCycle.corrective_action}
           >
-            💡 {activeCycle.improvement}
+            💡 {activeCycle.corrective_action}
           </span>
         )}
       </div>

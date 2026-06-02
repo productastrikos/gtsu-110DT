@@ -649,7 +649,7 @@ function FlightLibraryGrid({
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
       {flights.map(f => {
         const isLoading = loadingId === f.id;
-        const srColor = f.success_rate >= 80 ? 'var(--cwm-success)' : f.success_rate >= 60 ? 'var(--cwm-warning)' : 'var(--cwm-danger)';
+        const srColor = f.success_rate_pct >= 80 ? 'var(--cwm-success)' : f.success_rate_pct >= 60 ? 'var(--cwm-warning)' : 'var(--cwm-danger)';
         return (
           <div
             key={f.id}
@@ -665,21 +665,21 @@ function FlightLibraryGrid({
           >
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cwm-text)' }}>{f.label}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cwm-text)' }}>{f.flight_label}</div>
                 <div style={{ fontSize: 10, color: 'var(--cwm-text-faint)', marginTop: 2 }}>{f.date}</div>
               </div>
-              <span style={{ fontSize: 12, fontWeight: 700, color: srColor }}>{f.success_rate.toFixed(0)}%</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: srColor }}>{f.success_rate_pct.toFixed(0)}%</span>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 10px', fontSize: 11 }}>
               <span style={{ color: 'var(--cwm-text-faint)' }}>Duration</span>
               <span style={{ color: 'var(--cwm-text)', fontWeight: 600 }}>{f.duration_hrs.toFixed(1)} hrs</span>
               <span style={{ color: 'var(--cwm-text-faint)' }}>Cycles</span>
-              <span style={{ color: 'var(--cwm-text)', fontWeight: 600 }}>{f.n_cycles}</span>
+              <span style={{ color: 'var(--cwm-text)', fontWeight: 600 }}>{f.total_start_cycles}</span>
               <span style={{ color: 'var(--cwm-text-faint)' }}>Faults</span>
-              <span style={{ color: f.faulty_cycles > 0 ? 'var(--cwm-warning)' : 'var(--cwm-text)', fontWeight: 600 }}>{f.faulty_cycles}</span>
+              <span style={{ color: f.faulty_cycle_count > 0 ? 'var(--cwm-warning)' : 'var(--cwm-text)', fontWeight: 600 }}>{f.faulty_cycle_count}</span>
               <span style={{ color: 'var(--cwm-text-faint)' }}>Avg JPT1</span>
-              <span style={{ color: f.avg_jpt1 > 880 ? 'var(--cwm-danger)' : 'var(--cwm-text)', fontWeight: 600 }}>{f.avg_jpt1.toFixed(0)} °C</span>
+              <span style={{ color: f.avg_peak_jpt1_degC > 880 ? 'var(--cwm-danger)' : 'var(--cwm-text)', fontWeight: 600 }}>{f.avg_peak_jpt1_degC.toFixed(0)} °C</span>
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>

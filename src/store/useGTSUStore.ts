@@ -31,7 +31,7 @@ import {
   accumulateWear,
   simulateSandbox,
 } from '../lib/flightSimulator';
-import { getBackendFlights, getBackendFlight, getFlightTrace } from '../services/api';
+import { getBackendFlights, getBackendFlight, getFlightTrace, saveFlightToBackend } from '../services/api';
 
 export type ReplaySpeed = 1 | 2 | 5;
 
@@ -144,11 +144,18 @@ export const useGTSUStore = create<GTSUStore>((set, get) => ({
       wear,
       isFlightSimRunning: false,
       flightSimProgress:  1,
-      // Auto-select first faulty cycle (or first cycle) for replay convenience
       selectedCycleId:    pickInterestingCycle(flight),
       replayElapsedSec:   0,
       isPlaying:          false,
     });
+
+    // Fire-and-forget save to backend — silently ignored if backend is offline
+    saveFlightToBackend(flight)
+      .then(() => {
+        // Refresh the flight library so the newly-saved flight appears
+        get().fetchBackendFlights();
+      })
+      .catch(() => { /* backend offline — local simulation still works */ });
 
     return flight;
   },
@@ -249,7 +256,7 @@ export const useGTSUStore = create<GTSUStore>((set, get) => ({
   tickConsole: (deltaSec: number) => {
     const { consoleIsPlaying, consoleSec, loadedBackendFlight } = get();
     if (!consoleIsPlaying || !loadedBackendFlight) return;
-    const maxSec = loadedBackendFlight.meta.total_trace_sec;
+    const maxSec = loadedBackendFlight.meta.total_trace_duration_sec;
     const next = consoleSec + deltaSec;
     if (next >= maxSec) {
       set({ consoleSec: maxSec, consoleIsPlaying: false });

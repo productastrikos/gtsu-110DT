@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-generate_flight_csv.py  ─  GTSU-110 Digital Twin  |  v1.0  2026-05
+generate_flight_csv.py  ─  GTSU-110 Digital Twin  |  v2.0  2026-06
 ======================================================================
 Generates 5-10 synthetic GTSU-110 flights (50-100 h each) of realistic
 1 Hz start-cycle telemetry. Adds Gaussian noise, random micro-spikes,
@@ -104,8 +104,7 @@ def gen_cycle(
             ngg_pct = max(0.0, 55.0 * (1 - (r - 0.38) * 7.0))
         else:
             if r < 0.15:
-                # Exponential-style cranking: slow start, then faster as inertia
-                # overcome — more realistic than a linear ramp
+                # Exponential-style cranking: slow start, then faster as inertia overcome
                 ngg_pct = 13.5 * math.pow(r / 0.15, 2.1)
             elif r < 0.32:
                 # Light-up band: combustion assist kicks in at ~55 % of LIGHTUP_RPM
@@ -123,12 +122,9 @@ def gen_cycle(
         max_ngg = max(max_ngg, ngg_pct)
 
         # ── JPT1 (°C) ────────────────────────────────────────────────────
-        # Asymmetric light-off spike: sharp front edge (~3 s rise), slower decay
-        # Real combustion ignition propagates fast; heat soak persists longer.
         spike = 0.0
-        T_PEAK  = 0.345   # relative position of JPT peak within cycle
+        T_PEAK  = 0.345
         if cfg.fault == 'hot-start':
-            # Earlier, taller spike – fuel-rich combustion
             tp = 0.30
             spike = 300.0 * (
                 math.exp(-((r - tp) / 0.040) ** 2) if r <= tp
@@ -140,16 +136,13 @@ def gen_cycle(
                 else math.exp(-((r - T_PEAK) / 0.155) ** 2)
             )
         if cfg.fault == 'hot-start' and 0.27 < r < 0.56:
-            spike += 90.0 * math.sin((r - 0.27) / 0.29 * math.pi)  # secondary soak
+            spike += 90.0 * math.sin((r - 0.27) / 0.29 * math.pi)
 
         jpt1 = 175.0 + ngg_pct * 7.9 + spike + cfg.wear * 50.0 + rng.gauss(0, 9.0)
-        # Rare sensor spike artifact
         if rng.random() < 0.015:
             jpt1 += rng.uniform(28.0, 80.0)
-        # High-wear creep drift
         if cfg.wear > 0.7 and phase == 'self-sustaining':
             jpt1 += rng.gauss(0, 6.0)
-
         jpt1 = round(clamp(jpt1, 20.0, 1032.0), 1)
         peak_jpt1 = max(peak_jpt1, jpt1)
 
@@ -157,13 +150,10 @@ def gen_cycle(
         p2p1 = 1.0 + (NOMINAL_P2P1 - 1.0) * (ngg_pct / 92.0) ** 1.45
         if cfg.fault == 'compressor-stall' and r > 0.38:
             p2p1 -= 0.65
-        # Hysteresis noise: slightly larger fluctuation during acceleration phase
         noise_scale = 0.032 if phase == 'acceleration' else 0.019
         p2p1 += rng.gauss(0, noise_scale)
-        # Surge flutter spike
         if cfg.fault == 'compressor-stall' and rng.random() < 0.05:
             p2p1 -= rng.uniform(0.2, 0.5)
-        # OAT correction: lower compression at higher intake temperature
         p2p1 -= max(0.0, (cfg.oat - 15.0) * 0.003)
         p2p1 = round(clamp(p2p1, 1.0, 4.9), 3)
 
@@ -173,7 +163,7 @@ def gen_cycle(
         # ── Fuel / Stepper ─────────────────────────────────────────────────
         fuel_demand  = max(0.0, ngg_pct * 0.079)
         if cfg.fault == 'fuel-overshoot' and 0.3 < r < 0.6:
-            fuel_demand *= 1.0 + rng.uniform(0.05, 0.18)   # overshoot band
+            fuel_demand *= 1.0 + rng.uniform(0.05, 0.18)
         fuel_flow  = round(max(0.0, fuel_demand + rng.gauss(0, 0.065)), 3)
         stepper    = int(clamp((fuel_demand / 10.0) * 255.0, 0.0, 255.0))
         total_fuel += fuel_flow / 3600.0
@@ -182,7 +172,7 @@ def gen_cycle(
         vib = 0.22 + ngg_pct * 0.016 + cfg.wear * 0.68 + rng.gauss(0, 0.11)
         if cfg.fault == 'high-vibration':
             vib += 2.1 * abs(math.sin(t * 0.85 + rng.uniform(0, 0.5)))
-        if rng.random() < 0.007:           # rare vibration spike
+        if rng.random() < 0.007:
             vib += rng.uniform(1.0, 3.5)
         vib = round(max(0.0, vib), 3)
 
@@ -194,23 +184,23 @@ def gen_cycle(
                 '0x0008' if cfg.status == 'degraded'    else '0x0000')
 
         rows.append({
-            'ts':            round(base_ts + t, 1),
-            'cycle_num':     cfg.num,
-            'phase':         phase,
-            'jpt1':          jpt1,
-            'ngg_rpm':       ngg_rpm,
-            'ngg_pct':       ngg_pct,
-            'p2p1':          p2p1,
-            'oat':           oat,
-            'stepper_pos':   stepper,
-            'fuel_flow_kgh': fuel_flow,
-            'vibration':     vib,
-            'secu_healthy':  secu,
-            'bit_pass':      bit,
-            'mil_bus_word':  mil,
-            'status':        cfg.status,
-            'fault_reason':  cfg.fault or '',
-            'flight_hour':   round(cfg.flight_hour, 3),
+            'elapsed_time_sec':         round(base_ts + t, 1),
+            'cycle_number':             cfg.num,
+            'start_phase':              phase,
+            'jet_pipe_temp_degC':       jpt1,
+            'gas_gen_speed_rpm':        ngg_rpm,
+            'gas_gen_speed_pct':        ngg_pct,
+            'compressor_pressure_ratio': p2p1,
+            'ambient_temp_degC':        oat,
+            'fuel_valve_steps':         stepper,
+            'fuel_flow_kg_per_hr':      fuel_flow,
+            'vibration_mm_per_sec':     vib,
+            'secu_processor_ok':        secu,
+            'built_in_test_pass':       bit,
+            'mil_1553b_status_word':    mil,
+            'cycle_status':             cfg.status,
+            'fault_type':               cfg.fault or '',
+            'flight_hour_elapsed':      round(cfg.flight_hour, 3),
         })
 
     return rows, round(dur, 1), round(peak_jpt1, 1), round(max_ngg, 1), round(total_fuel, 5)
@@ -220,12 +210,10 @@ def gen_cycle(
 def gen_flight(flight_id: int, rng: random.Random) -> Dict[str, Any]:
     duration_hrs = rng.uniform(50, 100)
 
-    # Environmental variation: slow sinusoidal OAT (altitude + time of day)
-    oat_base  = rng.uniform(-12, 38)    # base ambient temperature
-    oat_amp   = rng.uniform(5, 15)      # day/night amplitude
+    oat_base  = rng.uniform(-12, 38)
+    oat_amp   = rng.uniform(5, 15)
     oat_phase = rng.uniform(0, 2 * math.pi)
 
-    # Approx 2.8–3.3 start cycles per flight hour
     n_cycles = int(duration_hrs * (2.8 + rng.uniform(0, 0.5)) + rng.gauss(0, 8))
     n_cycles = max(30, min(350, n_cycles))
 
@@ -238,9 +226,8 @@ def gen_flight(flight_id: int, rng: random.Random) -> Dict[str, Any]:
         frac        = i / n_cycles
         flight_hour = frac * duration_hrs
 
-        # OAT: sinusoidal variation (4 complete cycles per flight = ~12 h period)
         oat = oat_base + oat_amp * math.sin(oat_phase + frac * 2 * math.pi * 4)
-        oat += rng.gauss(0, 1.4)           # local weather noise
+        oat += rng.gauss(0, 1.4)
         oat = round(clamp(oat, -28.0, 58.0), 1)
 
         # ── Fault selection (wear-driven probability) ─────────────────────
@@ -279,17 +266,17 @@ def gen_flight(flight_id: int, rng: random.Random) -> Dict[str, Any]:
         all_rows.extend(rows)
 
         cycles_meta.append({
-            'cycle_num':     i + 1,
-            'flight_hour':   round(flight_hour, 2),
-            'status':        status,
-            'fault_reason':  fault or '',
-            'improvement':   FAULT_IMPROVEMENTS.get(fault, '') if fault else '',
-            'duration_sec':  dur,
-            'peak_jpt1':     peak_jpt1,
-            'max_ngg_pct':   max_ngg,
-            'total_fuel_kg': total_fuel,
-            'start_ts':      round(ts, 1),
-            'end_ts':        round(ts + dur, 1),
+            'cycle_number':             i + 1,
+            'flight_hour_elapsed':      round(flight_hour, 2),
+            'cycle_status':             status,
+            'fault_type':               fault or '',
+            'corrective_action':        FAULT_IMPROVEMENTS.get(fault, '') if fault else '',
+            'duration_sec':             dur,
+            'peak_jet_pipe_temp_degC':  peak_jpt1,
+            'max_gas_gen_speed_pct':    max_ngg,
+            'fuel_consumed_kg':         total_fuel,
+            'cycle_start_sec':          round(ts, 1),
+            'cycle_end_sec':            round(ts + dur, 1),
         })
 
         # Inter-cycle gap: 15–45 min idle
@@ -303,98 +290,111 @@ def gen_flight(flight_id: int, rng: random.Random) -> Dict[str, Any]:
         wear = min(1.0, wear + wear_delta)
 
     # Flight summary
-    n_ok    = sum(1 for c in cycles_meta if c['status'] == 'success')
-    n_fault = sum(1 for c in cycles_meta if c['status'] in ('faulty', 'aborted'))
+    n_ok    = sum(1 for c in cycles_meta if c['cycle_status'] == 'success')
+    n_fault = sum(1 for c in cycles_meta if c['cycle_status'] in ('faulty', 'aborted'))
     sr      = round(n_ok / n_cycles * 100, 1)
-    avg_j   = round(sum(c['peak_jpt1'] for c in cycles_meta) / n_cycles, 1)
-    fuel_t  = round(sum(c['total_fuel_kg'] for c in cycles_meta), 2)
-    total_trace_sec = round(all_rows[-1]['ts'] if all_rows else 0, 0)
+    avg_j   = round(sum(c['peak_jet_pipe_temp_degC'] for c in cycles_meta) / n_cycles, 1)
+    fuel_t  = round(sum(c['fuel_consumed_kg'] for c in cycles_meta), 2)
+    total_trace_sec = round(all_rows[-1]['elapsed_time_sec'] if all_rows else 0, 0)
 
-    # Generate an ISO-ish date
     month = ((flight_id - 1) % 12) + 1
     day   = ((flight_id * 7) % 27) + 1
     date  = f'2026-{month:02d}-{day:02d}'
 
     return {
-        'flight_id':      flight_id,
-        'label':          f'Flight {flight_id:03d}',
-        'duration_hrs':   round(duration_hrs, 1),
-        'n_cycles':       n_cycles,
-        'date':           date,
-        'success_rate':   sr,
-        'faulty_cycles':  n_fault,
-        'avg_jpt1':       avg_j,
-        'total_fuel_kg':  fuel_t,
-        'total_trace_sec': total_trace_sec,
-        'cycles_meta':    cycles_meta,
-        'trace':          all_rows,
+        'flight_id':               flight_id,
+        'flight_label':            f'Flight {flight_id:03d}',
+        'duration_hrs':            round(duration_hrs, 1),
+        'total_start_cycles':      n_cycles,
+        'date':                    date,
+        'success_rate_pct':        sr,
+        'faulty_cycle_count':      n_fault,
+        'avg_peak_jpt1_degC':      avg_j,
+        'total_fuel_kg':           fuel_t,
+        'total_trace_duration_sec': total_trace_sec,
+        'cycles_meta':             cycles_meta,
+        'trace':                   all_rows,
     }
 
 
 # ── SQLite schema ─────────────────────────────────────────────────────────────
 CREATE_SQL = """
 CREATE TABLE flights (
-    id              INTEGER PRIMARY KEY,
-    label           TEXT    NOT NULL,
-    duration_hrs    REAL    NOT NULL,
-    n_cycles        INTEGER NOT NULL,
-    date            TEXT    NOT NULL,
-    success_rate    REAL    NOT NULL,
-    faulty_cycles   INTEGER NOT NULL,
-    avg_jpt1        REAL    NOT NULL,
-    total_fuel_kg   REAL    NOT NULL,
-    total_trace_sec REAL    NOT NULL
+    id                      INTEGER PRIMARY KEY,
+    flight_label            TEXT    NOT NULL,
+    duration_hrs            REAL    NOT NULL,
+    total_start_cycles      INTEGER NOT NULL,
+    date                    TEXT    NOT NULL,
+    success_rate_pct        REAL    NOT NULL,
+    faulty_cycle_count      INTEGER NOT NULL,
+    avg_peak_jpt1_degC      REAL    NOT NULL,
+    total_fuel_kg           REAL    NOT NULL,
+    total_trace_duration_sec REAL   NOT NULL
 );
 
 CREATE TABLE cycles (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    flight_id       INTEGER NOT NULL REFERENCES flights(id),
-    cycle_num       INTEGER NOT NULL,
-    flight_hour     REAL    NOT NULL,
-    status          TEXT    NOT NULL,
-    fault_reason    TEXT    NOT NULL DEFAULT '',
-    improvement     TEXT    NOT NULL DEFAULT '',
-    duration_sec    REAL    NOT NULL,
-    peak_jpt1       REAL    NOT NULL,
-    max_ngg_pct     REAL    NOT NULL,
-    total_fuel_kg   REAL    NOT NULL,
-    start_ts        REAL    NOT NULL,
-    end_ts          REAL    NOT NULL
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    flight_id               INTEGER NOT NULL REFERENCES flights(id),
+    cycle_number            INTEGER NOT NULL,
+    flight_hour_elapsed     REAL    NOT NULL,
+    cycle_status            TEXT    NOT NULL,
+    fault_type              TEXT    NOT NULL DEFAULT '',
+    corrective_action       TEXT    NOT NULL DEFAULT '',
+    duration_sec            REAL    NOT NULL,
+    peak_jet_pipe_temp_degC REAL    NOT NULL,
+    max_gas_gen_speed_pct   REAL    NOT NULL,
+    fuel_consumed_kg        REAL    NOT NULL,
+    cycle_start_sec         REAL    NOT NULL,
+    cycle_end_sec           REAL    NOT NULL
 );
 
 CREATE TABLE trace (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    flight_id       INTEGER NOT NULL REFERENCES flights(id),
-    cycle_num       INTEGER NOT NULL,
-    ts              REAL    NOT NULL,
-    phase           TEXT    NOT NULL,
-    jpt1            REAL    NOT NULL,
-    ngg_rpm         INTEGER NOT NULL,
-    ngg_pct         REAL    NOT NULL,
-    p2p1            REAL    NOT NULL,
-    oat             REAL    NOT NULL,
-    stepper_pos     INTEGER NOT NULL,
-    fuel_flow_kgh   REAL    NOT NULL,
-    vibration       REAL    NOT NULL,
-    secu_healthy    INTEGER NOT NULL,
-    bit_pass        INTEGER NOT NULL,
-    mil_bus_word    TEXT    NOT NULL,
-    status          TEXT    NOT NULL,
-    fault_reason    TEXT    NOT NULL DEFAULT '',
-    flight_hour     REAL    NOT NULL
+    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+    flight_id                  INTEGER NOT NULL REFERENCES flights(id),
+    cycle_number               INTEGER NOT NULL,
+    elapsed_time_sec           REAL    NOT NULL,
+    start_phase                TEXT    NOT NULL,
+    jet_pipe_temp_degC         REAL    NOT NULL,
+    gas_gen_speed_rpm          INTEGER NOT NULL,
+    gas_gen_speed_pct          REAL    NOT NULL,
+    compressor_pressure_ratio  REAL    NOT NULL,
+    ambient_temp_degC          REAL    NOT NULL,
+    fuel_valve_steps           INTEGER NOT NULL,
+    fuel_flow_kg_per_hr        REAL    NOT NULL,
+    vibration_mm_per_sec       REAL    NOT NULL,
+    secu_processor_ok          INTEGER NOT NULL,
+    built_in_test_pass         INTEGER NOT NULL,
+    mil_1553b_status_word      TEXT    NOT NULL,
+    cycle_status               TEXT    NOT NULL,
+    fault_type                 TEXT    NOT NULL DEFAULT '',
+    flight_hour_elapsed        REAL    NOT NULL
 );
 
-CREATE INDEX idx_trace_flight_ts   ON trace(flight_id, ts);
-CREATE INDEX idx_trace_flight_cyc  ON trace(flight_id, cycle_num);
+CREATE INDEX idx_trace_flight_ts   ON trace(flight_id, elapsed_time_sec);
+CREATE INDEX idx_trace_flight_cyc  ON trace(flight_id, cycle_number);
 CREATE INDEX idx_cycles_flight     ON cycles(flight_id);
 """
 
-CSV_FIELDS = [
-    'flight_id', 'cycle_num', 'ts', 'phase',
-    'jpt1', 'ngg_rpm', 'ngg_pct', 'p2p1', 'oat',
-    'stepper_pos', 'fuel_flow_kgh', 'vibration',
-    'secu_healthy', 'bit_pass', 'mil_bus_word',
-    'status', 'fault_reason', 'flight_hour',
+# CSV column order for the trace export — descriptive names matching the DB schema
+CSV_TRACE_FIELDS = [
+    'flight_id',
+    'cycle_number',
+    'elapsed_time_sec',
+    'start_phase',
+    'jet_pipe_temp_degC',
+    'gas_gen_speed_rpm',
+    'gas_gen_speed_pct',
+    'compressor_pressure_ratio',
+    'ambient_temp_degC',
+    'fuel_valve_steps',
+    'fuel_flow_kg_per_hr',
+    'vibration_mm_per_sec',
+    'secu_processor_ok',
+    'built_in_test_pass',
+    'mil_1553b_status_word',
+    'cycle_status',
+    'fault_type',
+    'flight_hour_elapsed',
 ]
 
 
@@ -415,7 +415,7 @@ def main() -> None:
 
     db_path = data_dir / 'flights.db'
     if db_path.exists():
-        db_path.unlink()          # fresh regeneration
+        db_path.unlink()
 
     print(f'GTSU-110 flight data generator  |  {n_flights} flights  |  seed={args.seed}')
     print(f'Output: {db_path.resolve()}')
@@ -431,21 +431,23 @@ def main() -> None:
         # Insert flight metadata
         con.execute(
             'INSERT INTO flights VALUES (?,?,?,?,?,?,?,?,?,?)',
-            (flight['flight_id'], flight['label'], flight['duration_hrs'],
-             flight['n_cycles'], flight['date'], flight['success_rate'],
-             flight['faulty_cycles'], flight['avg_jpt1'], flight['total_fuel_kg'],
-             flight['total_trace_sec']),
+            (flight['flight_id'], flight['flight_label'], flight['duration_hrs'],
+             flight['total_start_cycles'], flight['date'], flight['success_rate_pct'],
+             flight['faulty_cycle_count'], flight['avg_peak_jpt1_degC'],
+             flight['total_fuel_kg'], flight['total_trace_duration_sec']),
         )
 
         # Insert cycle summaries
         con.executemany(
             '''INSERT INTO cycles
-               (flight_id,cycle_num,flight_hour,status,fault_reason,improvement,
-                duration_sec,peak_jpt1,max_ngg_pct,total_fuel_kg,start_ts,end_ts)
+               (flight_id, cycle_number, flight_hour_elapsed, cycle_status, fault_type,
+                corrective_action, duration_sec, peak_jet_pipe_temp_degC,
+                max_gas_gen_speed_pct, fuel_consumed_kg, cycle_start_sec, cycle_end_sec)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
-            [(fid, c['cycle_num'], c['flight_hour'], c['status'], c['fault_reason'],
-              c['improvement'], c['duration_sec'], c['peak_jpt1'], c['max_ngg_pct'],
-              c['total_fuel_kg'], c['start_ts'], c['end_ts'])
+            [(fid, c['cycle_number'], c['flight_hour_elapsed'], c['cycle_status'],
+              c['fault_type'], c['corrective_action'], c['duration_sec'],
+              c['peak_jet_pipe_temp_degC'], c['max_gas_gen_speed_pct'],
+              c['fuel_consumed_kg'], c['cycle_start_sec'], c['cycle_end_sec'])
              for c in flight['cycles_meta']],
         )
 
@@ -453,37 +455,42 @@ def main() -> None:
         trace = flight['trace']
         con.executemany(
             '''INSERT INTO trace
-               (flight_id,cycle_num,ts,phase,jpt1,ngg_rpm,ngg_pct,p2p1,oat,
-                stepper_pos,fuel_flow_kgh,vibration,secu_healthy,bit_pass,
-                mil_bus_word,status,fault_reason,flight_hour)
+               (flight_id, cycle_number, elapsed_time_sec, start_phase,
+                jet_pipe_temp_degC, gas_gen_speed_rpm, gas_gen_speed_pct,
+                compressor_pressure_ratio, ambient_temp_degC, fuel_valve_steps,
+                fuel_flow_kg_per_hr, vibration_mm_per_sec, secu_processor_ok,
+                built_in_test_pass, mil_1553b_status_word, cycle_status,
+                fault_type, flight_hour_elapsed)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-            [(fid, r['cycle_num'], r['ts'], r['phase'], r['jpt1'], r['ngg_rpm'],
-              r['ngg_pct'], r['p2p1'], r['oat'], r['stepper_pos'], r['fuel_flow_kgh'],
-              r['vibration'], r['secu_healthy'], r['bit_pass'], r['mil_bus_word'],
-              r['status'], r['fault_reason'], r['flight_hour'])
+            [(fid, r['cycle_number'], r['elapsed_time_sec'], r['start_phase'],
+              r['jet_pipe_temp_degC'], r['gas_gen_speed_rpm'], r['gas_gen_speed_pct'],
+              r['compressor_pressure_ratio'], r['ambient_temp_degC'], r['fuel_valve_steps'],
+              r['fuel_flow_kg_per_hr'], r['vibration_mm_per_sec'], r['secu_processor_ok'],
+              r['built_in_test_pass'], r['mil_1553b_status_word'], r['cycle_status'],
+              r['fault_type'], r['flight_hour_elapsed'])
              for r in trace],
         )
 
-        # Write CSV
+        # Write CSV trace
         csv_path = csv_dir / f'flight_{fid:03d}.csv'
         with open(csv_path, 'w', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+            w = csv.DictWriter(f, fieldnames=CSV_TRACE_FIELDS)
             w.writeheader()
             for row in trace:
-                w.writerow({k: row[k] for k in CSV_FIELDS})
+                w.writerow({k: row[k] for k in CSV_TRACE_FIELDS})
 
         print(
-            f'{len(trace):,} samples · {flight["n_cycles"]} cycles · '
+            f'{len(trace):,} samples · {flight["total_start_cycles"]} cycles · '
             f'{flight["duration_hrs"]:.1f} hrs · '
-            f'{flight["success_rate"]:.0f}% success'
+            f'{flight["success_rate_pct"]:.0f}% success'
         )
 
     con.commit()
     con.close()
 
     size_kb = db_path.stat().st_size // 1024
-    print(f'\n✓ Done  →  {db_path}  ({size_kb:,} KB)')
-    print(f'  CSVs  →  {csv_dir}/')
+    print(f'\nDone  ->  {db_path}  ({size_kb:,} KB)')
+    print(f'  CSVs  ->  {csv_dir}/')
     print()
     print('Next steps:')
     print('  pip install fastapi uvicorn')
