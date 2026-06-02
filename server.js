@@ -1,6 +1,6 @@
 import express from 'express';
 import { createClient } from '@libsql/client';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -80,6 +80,126 @@ await db.executeMultiple(`
   CREATE INDEX IF NOT EXISTS idx_trace_flight_cyc ON trace(flight_id, cycle_number);
   CREATE INDEX IF NOT EXISTS idx_cycles_flight    ON cycles(flight_id);
 `);
+
+// ── CSV seed (populates DB from committed CSV files on first run) ─────────────
+async function seedFromCSVs() {
+  const countResult = await db.execute('SELECT COUNT(*) AS cnt FROM flights');
+  if (Number(countResult.rows[0].cnt) > 0) return;
+
+  const csvFiles = existsSync(CSV_DIR)
+    ? readdirSync(CSV_DIR).filter(f => f.endsWith('.csv')).sort()
+    : [];
+
+  if (csvFiles.length === 0) {
+    console.log('[seed] No CSV files found — database is empty');
+    return;
+  }
+
+  console.log(`[seed] Importing ${csvFiles.length} CSV file(s)…`);
+
+  for (const csvFile of csvFiles) {
+    const content = readFileSync(join(CSV_DIR, csvFile), 'utf8');
+    const lines = content.trim().split('\n');
+    if (lines.length < 2) continue;
+
+    const headers = lines[0].split(',');
+    const traceRows = lines.slice(1).map(line => {
+      const vals = line.split(',');
+      const row = {};
+      headers.forEach((h, i) => { row[h] = vals[i] ?? ''; });
+      return row;
+    });
+    if (traceRows.length === 0) continue;
+
+    const flightId = Number(traceRows[0].flight_id);
+
+    // Group trace rows by cycle_number
+    const cycleMap = new Map();
+    for (const r of traceRows) {
+      if (!cycleMap.has(r.cycle_number)) cycleMap.set(r.cycle_number, []);
+      cycleMap.get(r.cycle_number).push(r);
+    }
+
+    // Per-cycle aggregates
+    const cycleStats = [];
+    for (const [cycleNum, cycleRows] of cycleMap) {
+      const last      = cycleRows[cycleRows.length - 1];
+      const maxJpt    = Math.max(...cycleRows.map(r => Number(r.jet_pipe_temp_degC)));
+      const maxNgg    = Math.max(...cycleRows.map(r => Number(r.gas_gen_speed_pct)));
+      // 1-Hz trace: each row = 1 s; fuel_flow is kg/hr → divide by 3600
+      const fuelKg    = cycleRows.reduce((s, r) => s + Number(r.fuel_flow_kg_per_hr) / 3600, 0);
+      const duration  = Math.max(...cycleRows.map(r => Number(r.elapsed_time_sec)));
+      const flightHr  = Number(cycleRows[0].flight_hour_elapsed);
+      const startSec  = flightHr * 3600;
+      cycleStats.push({
+        num: Number(cycleNum), flightHr, status: last.cycle_status, faultType: last.fault_type,
+        maxJpt, maxNgg, fuelKg, duration, startSec, endSec: startSec + duration,
+      });
+    }
+
+    // Flight aggregates
+    const totalCycles    = cycleStats.length;
+    const successCount   = cycleStats.filter(c => c.status === 'success').length;
+    const faultyCount    = cycleStats.filter(c => ['faulty', 'aborted'].includes(c.status)).length;
+    const successRatePct = totalCycles ? Math.round(successCount / totalCycles * 1000) / 10 : 0;
+    const avgJpt1        = totalCycles
+      ? Math.round(cycleStats.reduce((s, c) => s + c.maxJpt, 0) / totalCycles * 10) / 10 : 0;
+    const totalFuelKg    = Math.round(cycleStats.reduce((s, c) => s + c.fuelKg, 0) * 100) / 100;
+    const maxElapsed     = Math.max(...traceRows.map(r => Number(r.elapsed_time_sec)));
+    const durationHrs    = Math.max(...traceRows.map(r => Number(r.flight_hour_elapsed)));
+    const date           = new Date().toISOString().split('T')[0];
+    const label          = `FLIGHT-${String(flightId).padStart(3, '0')}`;
+
+    await db.execute({
+      sql: `INSERT OR IGNORE INTO flights
+              (id, flight_label, duration_hrs, total_start_cycles, date,
+               success_rate_pct, faulty_cycle_count, avg_peak_jpt1_degC,
+               total_fuel_kg, total_trace_duration_sec)
+            VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      args: [flightId, label, durationHrs, totalCycles, date,
+             successRatePct, faultyCount, avgJpt1, totalFuelKg, maxElapsed],
+    });
+
+    // Cycles batch
+    await db.batch(cycleStats.map(c => ({
+      sql: `INSERT INTO cycles
+              (flight_id, cycle_number, flight_hour_elapsed, cycle_status, fault_type,
+               corrective_action, duration_sec, peak_jet_pipe_temp_degC,
+               max_gas_gen_speed_pct, fuel_consumed_kg, cycle_start_sec, cycle_end_sec)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      args: [flightId, c.num, c.flightHr, c.status, c.faultType,
+             '', c.duration, c.maxJpt, c.maxNgg, c.fuelKg, c.startSec, c.endSec],
+    })), 'write');
+
+    // Trace rows in chunks of 500 to avoid oversized batches
+    const CHUNK = 500;
+    for (let i = 0; i < traceRows.length; i += CHUNK) {
+      await db.batch(traceRows.slice(i, i + CHUNK).map(r => ({
+        sql: `INSERT INTO trace
+                (flight_id, cycle_number, elapsed_time_sec, start_phase,
+                 jet_pipe_temp_degC, gas_gen_speed_rpm, gas_gen_speed_pct,
+                 compressor_pressure_ratio, ambient_temp_degC, fuel_valve_steps,
+                 fuel_flow_kg_per_hr, vibration_mm_per_sec, secu_processor_ok,
+                 built_in_test_pass, mil_1553b_status_word, cycle_status,
+                 fault_type, flight_hour_elapsed)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        args: [
+          Number(r.flight_id), Number(r.cycle_number), Number(r.elapsed_time_sec), r.start_phase,
+          Number(r.jet_pipe_temp_degC), Number(r.gas_gen_speed_rpm), Number(r.gas_gen_speed_pct),
+          Number(r.compressor_pressure_ratio), Number(r.ambient_temp_degC), Number(r.fuel_valve_steps),
+          Number(r.fuel_flow_kg_per_hr), Number(r.vibration_mm_per_sec), Number(r.secu_processor_ok),
+          Number(r.built_in_test_pass), r.mil_1553b_status_word, r.cycle_status,
+          r.fault_type, Number(r.flight_hour_elapsed),
+        ],
+      })), 'write');
+    }
+
+    console.log(`[seed] Flight ${flightId}: ${totalCycles} cycles, ${traceRows.length} trace rows`);
+  }
+  console.log('[seed] Complete');
+}
+
+await seedFromCSVs();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const rows = (r) => r.rows;
