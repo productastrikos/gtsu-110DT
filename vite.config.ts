@@ -7,8 +7,8 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
-      // Proxy /api/* → FastAPI on port 8000 during dev.
-      // In production FastAPI serves both the API and the built frontend itself.
+      // Proxy /api/* → Express server (server.js) on port 8000 during dev.
+      // In production, Hostinger runs `npm start` which runs server.js directly.
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
