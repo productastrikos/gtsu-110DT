@@ -11,6 +11,7 @@ Run:
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import sqlite3, csv, io
 from pathlib import Path
 from typing import Optional, List, Any, Dict
@@ -28,6 +29,7 @@ app.add_middleware(
 
 DB_PATH  = Path(__file__).parent.parent / 'data' / 'flights.db'
 CSV_DIR  = Path(__file__).parent.parent / 'data' / 'csvs'
+DIST_DIR = Path(__file__).parent.parent / 'dist'
 
 CSV_TRACE_FIELDS = [
     'flight_id', 'cycle_number', 'elapsed_time_sec', 'start_phase',
@@ -366,3 +368,20 @@ def delete_flight(flight_id: int):
             csv_path.unlink()
     finally:
         con.close()
+
+
+# ── SPA catch-all (production) ────────────────────────────────────────────────
+# Must be declared last so API routes take precedence.
+# In dev, Vite handles all non-/api paths; this route is never hit.
+# In prod (after `npm run build`), FastAPI serves the built React app here.
+@app.get('/{full_path:path}')
+async def serve_spa(full_path: str):
+    if not DIST_DIR.exists():
+        raise HTTPException(
+            status_code=404,
+            detail='Frontend not built. Run: npm run build',
+        )
+    candidate = DIST_DIR / full_path
+    if candidate.is_file():
+        return FileResponse(candidate)
+    return FileResponse(DIST_DIR / 'index.html')
