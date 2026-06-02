@@ -52,19 +52,16 @@ export const acknowledgeAdvisory = (id: string) => api.put(`/advisories/${id}/ac
 export const getWeather = () => api.get('/weather');
 export const getZones = () => api.get('/zones');
 
-// ─── Flight Database (FastAPI backend on port 8000) ──────────────────────────
-// Always target localhost — backend is always co-located with the dev machine.
-// The Vite dev server also proxies /flight-api → http://127.0.0.1:8000 as a
-// fallback when the app is accessed via a LAN IP.
+// ─── Flight Database (FastAPI backend) ───────────────────────────────────────
+// Relative path works in both dev (Vite proxies /api → :8000) and production
+// (FastAPI serves both the API and the built frontend on the same port).
 
 import type {
   BackendFlight, BackendCycle, TraceRow,
   FlightRecord,
 } from '../types/engine';
 
-const FLIGHT_DB = 'http://localhost:8000/api';
-
-const flightApi = axios.create({ baseURL: FLIGHT_DB, timeout: 30000 });
+const flightApi = axios.create({ baseURL: '/api', timeout: 30000 });
 
 /** List all flights (metadata only). */
 export const getBackendFlights = () =>
