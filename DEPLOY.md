@@ -1,25 +1,27 @@
-# GTSU-110 — server deployment
+# GTSU-110 — local server deployment
 
-Two PM2 processes + one nginx server block, same shape as your other apps.
+Two PM2 processes behind one local nginx block. Plain HTTP — no domain, no TLS,
+no Cloudflare. (The public office-server deploy at `gtsu-110.astrikos.org` —
+SSL + real `server_name` — comes later; this doc is the LAN/local box only.)
 
-| Piece | Process | Port | nginx | Cloudflare |
-| --- | --- | --- | --- | --- |
-| Frontend (static SPA `dist/`) | `pm2 serve ./dist` | **3213** | `gtsu.astrikos.xyz` → `location /` | Orange (proxied) |
-| Backend REST API (`/api/*`) | `server.js` | **3013** | `gtsu.astrikos.xyz` → `location /api/` | (same subdomain) |
+| Piece | Process | Port | nginx |
+| --- | --- | --- | --- |
+| Frontend (static SPA `dist/`) | `pm2 serve ./dist` | **3213** | `location /` |
+| Backend REST API (`/api/*`) | `server.js` | **3013** | `location /api/` |
 
-Unlike the GPUaaS app there is **no socket subdomain** — GTSU-110 has no
-WebSockets. The frontend talks to the backend over plain REST at a **relative
-`/api` path** (see `src/services/api.ts`), so both live on **one subdomain** and
-nginx splits the traffic: `/api/*` → backend `:3013`, everything else →
-frontend `:3213`.
+The frontend talks to the backend over plain REST at a **relative `/api` path**
+(see `src/services/api.ts`), so both sit behind **one nginx server** and nginx
+splits the traffic: `/api/*` → backend `:3013`, everything else → frontend
+`:3213`. The flight data (the real backend feature) always uses that relative
+`/api`, so it resolves to whatever host you open the page on and flows through
+nginx — nothing host-specific is baked into the build.
 
-> The `/api` base URL is relative and same-origin, so there is **nothing to bake
-> into the build** — no `.env.production` to edit. If you ever move the API to
-> its own subdomain, that relative path is the thing you'd change.
+Prereq on the box: **Node 20** (`.nvmrc`), **PM2** (`npm i -g pm2`), and
+**nginx**. No Python needed.
 
 ---
 
-## 1. Build (do this before pushing, or on the server)
+## 1. Build
 
 ```bash
 npm install              # installs BOTH the frontend build deps and the
@@ -27,11 +29,10 @@ npm install              # installs BOTH the frontend build deps and the
 npm run build            # → dist/  (static SPA, incl. index.html)
 ```
 
-The backend needs no separate install step — its dependencies are in the root
-`package.json`. Push the repo (with `dist/` built) to the server, or run the
-build there. The SQLite DB (`data/flights.db`) and seed CSVs (`data/csvs/`) are
-committed, so the API has data on first boot; if the DB is empty, `server.js`
-auto-seeds it from the CSVs.
+The backend needs no separate install — its deps are in the root `package.json`.
+The SQLite DB (`data/flights.db`) and seed CSVs (`data/csvs/`) are committed, so
+the API has data on first boot; if the DB is empty, `server.js` auto-seeds from
+the CSVs.
 
 ## 2. Start the PM2 processes
 
@@ -54,66 +55,71 @@ PORT=3013 pm2 start server.js --name "gtsu_backend_3013"
 pm2 save
 ```
 
-Quick check: `curl -k https://gtsu.astrikos.xyz/api/health` →
-`{"status":"ok","db":"…/flights.db","db_exists":true}`.
+Optional — survive reboots: run `pm2 startup` once and follow the printed
+command, then `pm2 save`.
 
-## 3. Cloudflare DNS
-
-- `gtsu.astrikos.xyz` → **Orange cloud** (proxied), like astriverse/dso/gpuaas.
-  No gray-cloud subdomain needed (no WebSockets).
+Quick check (before nginx): `curl http://127.0.0.1:3013/api/health` →
+`{"status":"ok","db":"…/flights.db","db_exists":true}`, and
+`curl -I http://127.0.0.1:3213` → `200 OK`.
 
 ---
 
-## nginx — single app subdomain (frontend + API split)
+## 3. nginx — local block (frontend + API split)
 
-Add this alongside your other `listen 8443 ssl` blocks. The **order matters**:
-`location /api/` must come before `location /`, and its `proxy_pass` has **no
-trailing slash** so the `/api` prefix is preserved (the Express routes are
-`/api/flights`, `/api/health`, …).
+Drop this in `/etc/nginx/sites-available/gtsu-110` (then symlink into
+`sites-enabled/`), or as a `server {}` inside `/etc/nginx/conf.d/gtsu-110.conf`.
+The **order matters**: `location /api/` comes before `location /`, and its
+`proxy_pass` has **no trailing slash** so the `/api` prefix is preserved (the
+Express routes are `/api/flights`, `/api/health`, …).
 
 ```nginx
 server {
-        listen 8443 ssl;
-        ssl_certificate     /etc/certs/astrikos.xyz/fullchain.pem;
-        ssl_certificate_key /etc/certs/astrikos.xyz/privkey.pem;
-        server_name gtsu.astrikos.xyz;
+        listen 80;
+        server_name _;          # catch-all: works via localhost or the box's LAN IP
 
         # API → backend (server.js) on 3013 — keep the /api prefix
         location /api/ {
-                add_header 'Access-Control-Allow-Origin' '*' always;
                 proxy_pass http://127.0.0.1:3013;
                 proxy_set_header Host $host;
         }
 
         # Frontend → static SPA on 3213
         location / {
-                add_header 'Access-Control-Allow-Origin' '*' always;
                 proxy_pass http://127.0.0.1:3213;
+                proxy_set_header Host $host;
         }
 }
 ```
 
-Then `sudo nginx -t && sudo systemctl reload nginx`.
+> If nginx already has a `default_server` on port 80, either replace that block
+> or give this one a real `server_name` (e.g. the machine's hostname) so it
+> doesn't collide.
+
+Then:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
 
 ---
 
-## Verify
+## 4. Verify
 
-1. `curl -k https://gtsu.astrikos.xyz/api/health` → `{"status":"ok",…}` (backend reachable).
-2. Open `https://gtsu.astrikos.xyz` in a browser → log in with `admin` / `admin123`.
-3. Go to **Post-Flight Analysis** → the flight list loads from the API
-   (`/api/flights`). If it's empty or errors, the browser console/network tab
-   shows the `/api/...` request — confirm it 200s and that `location /api/` is
-   pointing at `:3013`.
-4. Deep-link a client route (e.g. `https://gtsu.astrikos.xyz/simulator`) and
-   refresh — it should still load (SPA fallback via `--spa`), not 404.
+1. `curl http://localhost/api/health` → `{"status":"ok",…}` (nginx → backend).
+2. Open `http://localhost/` (or `http://<box-LAN-IP>/`) in a browser → log in
+   with `admin` / `admin123`.
+3. Go to **Post-Flight Analysis** → the flight list loads from `/api/flights`.
+   If it's empty or errors, check the browser Network tab: the `/api/...`
+   request should 200; if it 404s, `location /api/` isn't pointing at `:3013`.
+4. Deep-link a client route (e.g. `http://localhost/simulator`) and refresh — it
+   should still load (SPA fallback via `--spa`), not 404.
 
-> The Python `backend/main.py` (FastAPI) is **not** used in this deployment —
-> `server.js` is the API server. You do **not** need Python or `pip` on the box.
+> The Python `backend/main.py` (FastAPI) is **not** used here — `server.js` is
+> the API server.
 
 ---
 
-## Updating a live deploy
+## Updating the deploy
 
 ```bash
 git pull origin main
