@@ -7,17 +7,24 @@
  *             physical rig is connected) at 1 Hz
  *
  * Empty until a flight is simulated, OR Live mode is toggled.
+ *
+ * The engine is presented as a free-turbine turboshaft (GTSU-110):
+ *   N1 = gas-generator spool · N2 = power/free turbine · TGT = turbine gas temp.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGTSUStore, getSelectedCycle, getCurrentFrame } from '../store/useGTSUStore';
-import { EngineModel3D, HotspotLegend } from '../components/EngineModel3D';
+import { EngineModel3D, HotspotLegend, SectionLegend, LabelToggle } from '../components/EngineModel3D';
 import { FAULT_LABELS } from '../lib/flightSimulator';
 import { buildSimulatorHotspots } from '../lib/engineHotspots';
 import type { CycleTraceSample, StartPhase } from '../types/engine';
 import { LineChart } from '../components/LineChart';
 import SimulationConsole from '../components/SimulationConsole';
+import {
+  deriveN2, deriveTempStations, deriveSectionRatios, comparePressureRatio,
+  MAX_NGG_RPM, MAX_NPT_RPM, NOMINAL_P2P1, LIGHTUP_RPM, ENGINE_FORMULAS,
+} from '../lib/engineDerived';
 
 const PHASE_LABELS: Record<StartPhase, string> = {
   'idle':            'IDLE',
@@ -57,6 +64,11 @@ export default function ProcessSimulatorPage() {
   const [dbMode, setDbMode]           = useState(!!loadedBackendFlight);
   const [consoleFrame, setConsoleFrame] = useState<CycleTraceSample | null>(null);
 
+  // 3D twin display controls
+  const [showLabels, setShowLabels]     = useState(true);
+  const [showSections, setShowSections] = useState(true);
+  const [showFormulas, setShowFormulas] = useState(false);
+
   // Auto-enter db mode when a backend flight is loaded
   useEffect(() => {
     if (loadedBackendFlight) setDbMode(true);
@@ -75,6 +87,12 @@ export default function ProcessSimulatorPage() {
     [frame, cycle, wear, dbMode],
   );
 
+  // ── Derived turboshaft quantities from the current frame ────
+  const n2       = frame ? deriveN2(frame) : null;
+  const temps    = frame ? deriveTempStations(frame) : null;
+  const ratios   = frame ? deriveSectionRatios(frame) : null;
+  const pressure = frame ? comparePressureRatio(frame) : null;
+
   // ── Replay tick: 1 Hz when playing ─────────────────────────
   useEffect(() => {
     if (!isPlaying || liveMode) return;
@@ -83,8 +101,6 @@ export default function ProcessSimulatorPage() {
   }, [isPlaying, liveMode, tickReplay]);
 
   // ── Live mode simulated stream: 1 Hz ──────────────────────
-  // Until a real test-rig WebSocket is wired up, we generate plausible live
-  // frames by stepping through a synthesized cycle.
   const liveTRef = useRef(0);
   useEffect(() => {
     if (!liveMode) { liveTRef.current = 0; return; }
@@ -118,8 +134,8 @@ export default function ProcessSimulatorPage() {
             Post-Flight Analysis page, or switch to Live mode below.
           </p>
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-            <button onClick={() => navigate('/')} style={primaryBtn}>GO TO POST-FLIGHT ANALYSIS →</button>
-            <button onClick={() => setLiveMode(true)} style={ghostBtn}>▦ ENABLE LIVE MODE</button>
+            <button onClick={() => navigate('/')} className="gtsu-btn primary">GO TO POST-FLIGHT ANALYSIS →</button>
+            <button onClick={() => setLiveMode(true)} className="gtsu-btn ghost">▦ ENABLE LIVE MODE</button>
           </div>
         </div>
       </div>
@@ -136,10 +152,12 @@ export default function ProcessSimulatorPage() {
     ? liveHistory
     : (cycle?.trace ?? []).slice(0, Math.max(1, Math.floor(replayElapsedSec) + 1));
 
-  const jptSeries  = traceUpTo.map(s => ({ x: s.t, y: s.jpt1 }));
-  const nggSeries  = traceUpTo.map(s => ({ x: s.t, y: s.nggPct }));
+  const tgtSeries  = traceUpTo.map(s => ({ x: s.t, y: s.jpt1 }));
+  const n1Series   = traceUpTo.map(s => ({ x: s.t, y: s.nggPct }));
+  const n2Series   = traceUpTo.map(s => ({ x: s.t, y: deriveN2(s).pct }));
   const p2p1Series = traceUpTo.map(s => ({ x: s.t, y: s.p2p1 }));
-  const oatSeries  = traceUpTo.map(s => ({ x: s.t, y: s.oat }));
+  const fuelSeries = traceUpTo.map(s => ({ x: s.t, y: s.fuelFlow }));
+  const vibSeries  = traceUpTo.map(s => ({ x: s.t, y: s.vibration }));
 
   return (
     <div className="space-y-4">
@@ -233,21 +251,28 @@ export default function ProcessSimulatorPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, minHeight: 0 }}>
         {/* 3D model */}
         <div className="ds-panel" style={{ position: 'relative', overflow: 'hidden', height: 500 }}>
-          <EngineModel3D frame={frame} hotspots={hotspots} />
+          <EngineModel3D frame={frame} hotspots={hotspots} showLabels={showLabels} showSections={showSections} />
 
-          {/* Legend top-center */}
-          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.55)', borderRadius: 6 }}>
+          {/* Twin controls: section legend + label toggles */}
+          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.6)', borderRadius: 8, padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center', maxWidth: '92%' }}>
             <HotspotLegend items={hotspots} />
+            <SectionLegend />
+          </div>
+
+          <div style={{ position: 'absolute', bottom: 74, left: 12, display: 'flex', gap: 14, background: 'rgba(0,0,0,0.6)', borderRadius: 8, padding: '6px 10px' }}>
+            <LabelToggle label="Metric labels" on={showLabels} onChange={setShowLabels} />
+            <LabelToggle label="Section tags" on={showSections} onChange={setShowSections} />
           </div>
 
           {/* HUD overlay */}
-          <div style={{ position: 'absolute', top: 12, left: 12, padding: '8px 12px', background: 'rgba(0,0,0,0.55)', borderRadius: 6, fontFamily: 'monospace' }}>
+          <div style={{ position: 'absolute', top: 12, left: 12, padding: '8px 12px', background: 'rgba(0,0,0,0.6)', borderRadius: 6, fontFamily: 'monospace' }}>
             <div style={{ fontSize: 10, color: '#8ca0b6', letterSpacing: '0.06em' }}>PHASE</div>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>{PHASE_LABELS[currentPhase]}</div>
           </div>
-          <div style={{ position: 'absolute', top: 12, right: 12, padding: '8px 12px', background: 'rgba(0,0,0,0.55)', borderRadius: 6, fontFamily: 'monospace', textAlign: 'right' }}>
+          <div style={{ position: 'absolute', top: 12, right: 12, padding: '8px 12px', background: 'rgba(0,0,0,0.6)', borderRadius: 6, fontFamily: 'monospace', textAlign: 'right' }}>
             <div style={{ fontSize: 10, color: '#8ca0b6', letterSpacing: '0.06em' }}>T+ {elapsedDisplay}s</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>{(frame?.ngg ?? 0).toLocaleString()} RPM</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>N1 {(frame?.ngg ?? 0).toLocaleString()} RPM</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#4fa08f' }}>N2 {(n2?.rpm ?? 0).toLocaleString()} RPM</div>
           </div>
 
           {/* Phase progress bar at bottom */}
@@ -264,36 +289,52 @@ export default function ProcessSimulatorPage() {
 
         {/* Physics panel */}
         <div style={{ display: 'grid', gridTemplateRows: 'auto auto 1fr', gap: 12, minHeight: 0 }}>
-          {/* Gauges */}
+          {/* Shaft speeds N1 / N2 */}
           <div className="ds-panel" style={{ padding: 14 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.08em', marginBottom: 10, textTransform: 'uppercase' }}>Live Physics</div>
+            <PanelTitle>Shaft Speeds · Two-Spool</PanelTitle>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <ShaftReadout
+                name="N1 · Gas Generator" tone="#5b8de0"
+                rpm={frame?.ngg ?? 0} pct={frame?.nggPct ?? 0} maxRpm={MAX_NGG_RPM}
+                note={frame && frame.ngg > LIGHTUP_RPM ? 'lit · self-sustaining' : 'cranking'}
+                critPct={95}
+              />
+              <ShaftReadout
+                name="N2 · Power Turbine" tone="#4fa08f"
+                rpm={n2?.rpm ?? 0} pct={n2?.pct ?? 0} maxRpm={MAX_NPT_RPM}
+                note="free turbine · to load"
+                critPct={98}
+              />
+            </div>
+          </div>
+
+          {/* Key gauges */}
+          <div className="ds-panel" style={{ padding: 14 }}>
+            <PanelTitle>Live Physics</PanelTitle>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-              <Gauge label="JPT1" value={frame?.jpt1.toFixed(0) ?? '—'} unit="°C" max={1050} v={frame?.jpt1 ?? 0} critical={900} sublabel="≤900 gnd / ≤1020 flt" />
-              <Gauge label="Ngg" value={frame?.nggPct.toFixed(1) ?? '—'} unit="%" max={100} v={frame?.nggPct ?? 0} critical={95} sublabel={`${(frame?.ngg ?? 0).toLocaleString()} RPM`} />
-              <Gauge label="P2/P1" value={frame?.p2p1.toFixed(2) ?? '—'} unit=":1" max={4.2} v={frame?.p2p1 ?? 0} critical={4.0} inverted sublabel="nominal 3.86" />
-              <Gauge label="Fuel Flow" value={frame?.fuelFlow.toFixed(2) ?? '—'} unit="kg/h" max={10} v={frame?.fuelFlow ?? 0} critical={9} />
-              <Gauge label="Stepper Pos" value={frame?.stepperPos?.toString() ?? '—'} unit="/255 steps" max={255} v={frame?.stepperPos ?? 0} critical={240} sublabel={`≈${frame?.fuelFlow?.toFixed(1) ?? '—'} kg/h`} />
+              <Gauge label="TGT" value={frame?.jpt1.toFixed(0) ?? '—'} unit="°C" max={1050} v={frame?.jpt1 ?? 0} critical={900} sublabel="≤900 gnd / ≤1020 flt" />
+              <Gauge label="P2/P1" value={frame?.p2p1.toFixed(2) ?? '—'} unit=":1" max={4.2} v={frame?.p2p1 ?? 0} critical={4.0} inverted sublabel={`nom ${NOMINAL_P2P1}${pressure ? ` · ${pressure.deltaPct > 0 ? '+' : ''}${pressure.deltaPct}%` : ''}`} />
+              <Gauge label="Fuel Flow" value={frame?.fuelFlow.toFixed(2) ?? '—'} unit="kg/h" max={10} v={frame?.fuelFlow ?? 0} critical={9} sublabel={`${frame?.stepperPos ?? '—'} steps`} />
+              <Gauge label="Vibration" value={frame?.vibration.toFixed(1) ?? '—'} unit="mm/s" max={20} v={frame?.vibration ?? 0} critical={11} sublabel="alert 11 mm/s" />
               <Gauge label="OAT (ADU)" value={frame?.oat?.toFixed(1) ?? '—'} unit="°C" max={300} v={(frame?.oat ?? 15) + 100} critical={150} min={0} sublabel="-100 to +300°C" />
-              <Gauge label="Vibration" value={frame?.vibration.toFixed(1) ?? '—'} unit="mm/s" max={20} v={frame?.vibration ?? 0} critical={11} />
-              <Gauge label="Ngg RPM" value={(frame?.ngg ?? 0).toLocaleString()} unit="RPM" max={22000} v={frame?.ngg ?? 0} critical={21000} sublabel={`light-up >12,625 RPM${frame && frame.ngg > 12625 ? ' ✓' : ''}`} />
               <StatusGauge label="SECU BIT" ok={frame?.bitPass ?? true} detail={frame ? `0x${frame.milBusWord.toString(16).toUpperCase().padStart(4, '0')}` : '—'} />
             </div>
           </div>
 
           {/* Cycle context */}
-          <div className="ds-panel" style={{ padding: 14 }}>
+          <div className="ds-panel" style={{ padding: 14, minHeight: 0 }}>
             {dbMode ? (
               <>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.08em', marginBottom: 6, textTransform: 'uppercase' }}>Database Replay</div>
+                <PanelTitle>Database Replay</PanelTitle>
                 <div style={{ fontSize: 11, color: 'var(--cwm-text-muted)', lineHeight: 1.55 }}>
                   {consoleFrame
-                    ? `Phase: ${consoleFrame.phase?.toUpperCase() ?? '—'} · JPT1 ${consoleFrame.jpt1?.toFixed(0) ?? '—'}°C · Ngg ${consoleFrame.nggPct?.toFixed(1) ?? '—'}%`
+                    ? `Phase: ${consoleFrame.phase?.toUpperCase() ?? '—'} · TGT ${consoleFrame.jpt1?.toFixed(0) ?? '—'}°C · N1 ${consoleFrame.nggPct?.toFixed(1) ?? '—'}%`
                     : 'Use the console above to play or seek.'}
                 </div>
               </>
             ) : cycle && !liveMode ? (
               <>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.08em', marginBottom: 8, textTransform: 'uppercase' }}>Cycle Context</div>
+                <PanelTitle>Cycle Context</PanelTitle>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cwm-text)', marginBottom: 4 }}>
                   Cycle #{cycle.cycleNumber} · {cycle.status.toUpperCase()}
                 </div>
@@ -315,7 +356,7 @@ export default function ProcessSimulatorPage() {
               </>
             ) : liveMode ? (
               <>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.08em', marginBottom: 6, textTransform: 'uppercase' }}>Live Stream</div>
+                <PanelTitle>Live Stream</PanelTitle>
                 <div style={{ fontSize: 11, color: 'var(--cwm-text-muted)', lineHeight: 1.55 }}>
                   Ingesting telemetry from test rig at 1 Hz. Switch back to Replay to inspect a recorded cycle.
                 </div>
@@ -324,26 +365,58 @@ export default function ProcessSimulatorPage() {
               <div style={{ fontSize: 11, color: 'var(--cwm-text-faint)' }}>Select a cycle to inspect.</div>
             )}
           </div>
-
-          {/* Mini charts */}
-          <div className="ds-panel" style={{ padding: 14, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.08em', marginBottom: 8, textTransform: 'uppercase' }}>Trace</div>
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
-              {jptSeries.length > 1 ? (
-                <LineChart data={jptSeries} color="#f97316" yAxisLabel="JPT1 °C" height={90} />
-              ) : <EmptyMini label="JPT1" />}
-              {nggSeries.length > 1 ? (
-                <LineChart data={nggSeries} color="#10b981" yAxisLabel="Ngg %" height={90} />
-              ) : <EmptyMini label="Ngg" />}
-              {p2p1Series.length > 1 ? (
-                <LineChart data={p2p1Series} color="#818cf8" yAxisLabel="P2/P1" height={90} />
-              ) : <EmptyMini label="P2/P1" />}
-              {oatSeries.length > 1 ? (
-                <LineChart data={oatSeries} color="#38bdf8" yAxisLabel="OAT °C" height={90} />
-              ) : <EmptyMini label="OAT" />}
-            </div>
-          </div>
         </div>
+      </div>
+
+      {/* ── Temperature stations & per-section ratios ─────────── */}
+      <div className="ds-panel" style={{ padding: 16 }}>
+        <PanelTitle>Temperature Stations &amp; Section Ratios</PanelTitle>
+        {temps && ratios ? (
+          <>
+            <div style={{ fontSize: 10, color: 'var(--cwm-text-faint)', marginBottom: 10, letterSpacing: '0.02em' }}>
+              Gas-path total temperatures along the engine · T5 (TGT) is the measured inter-turbine temperature
+            </div>
+            <StationTrail temps={temps} />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3" style={{ marginTop: 14 }}>
+              {ratios.map(r => <RatioCard key={r.key} r={r} />)}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 11, color: 'var(--cwm-text-faint)' }}>Select or play a cycle to compute temperature stations.</div>
+        )}
+      </div>
+
+      {/* ── P2/P1 normal vs current ────────────────────────────── */}
+      {pressure && (
+        <div className="ds-panel" style={{ padding: 16 }}>
+          <PanelTitle>Compressor Pressure Ratio · Normal vs Current</PanelTitle>
+          <PressureCompareBar pressure={pressure} />
+        </div>
+      )}
+
+      {/* ── Trace graphs (expanded) ───────────────────────────── */}
+      <div className="ds-panel" style={{ padding: 16 }}>
+        <PanelTitle>Telemetry Traces</PanelTitle>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <MiniTrace title="TGT (°C)"        series={tgtSeries}  color="#f97316" label="TGT" />
+          <MiniTrace title="N1 · Gas Gen (%)" series={n1Series}   color="#5b8de0" label="N1" />
+          <MiniTrace title="N2 · Power Turbine (%)" series={n2Series} color="#4fa08f" label="N2" />
+          <MiniTrace title="P2/P1 ratio"     series={p2p1Series} color="#818cf8" label="P2/P1" />
+          <MiniTrace title="Fuel Flow (kg/h)" series={fuelSeries} color="#38bdf8" label="Fuel" />
+          <MiniTrace title="Vibration (mm/s)" series={vibSeries}  color="#eab308" label="Vibration" />
+        </div>
+      </div>
+
+      {/* ── Calculations / formulas ("in paper" physics) ──────── */}
+      <div className="ds-panel" style={{ padding: 16 }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+          onClick={() => setShowFormulas(o => !o)}
+        >
+          <PanelTitle noMargin>Calculations &amp; Physics — every parameter</PanelTitle>
+          <span style={{ color: 'var(--cwm-text-muted)', fontSize: 12 }}>{showFormulas ? '▲' : '▼'}</span>
+        </div>
+        {showFormulas && <FormulaList />}
       </div>
     </div>
   );
@@ -356,6 +429,14 @@ function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
     <div className="ds-panel px-5 py-4">
       <h2 style={{ fontSize: 20, fontWeight: 700, color: 'var(--cwm-text)', letterSpacing: '-0.01em' }}>{title}</h2>
       <p style={{ fontSize: 12, color: 'var(--cwm-text-muted)', marginTop: 4 }}>{subtitle}</p>
+    </div>
+  );
+}
+
+function PanelTitle({ children, noMargin }: { children: React.ReactNode; noMargin?: boolean }) {
+  return (
+    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.08em', marginBottom: noMargin ? 0 : 10, textTransform: 'uppercase' }}>
+      {children}
     </div>
   );
 }
@@ -417,6 +498,32 @@ function PhaseStrip({ currentPhase }: { currentPhase: StartPhase }) {
   );
 }
 
+/** Shaft speed readout — big RPM number with the percentage SHIFTED BELOW it. */
+function ShaftReadout({
+  name, tone, rpm, pct, maxRpm, note, critPct,
+}: {
+  name: string; tone: string; rpm: number; pct: number; maxRpm: number; note: string; critPct: number;
+}) {
+  const barPct = Math.min(100, (rpm / maxRpm) * 100);
+  const barColor = pct > critPct ? 'var(--cwm-danger)' : barPct > 75 ? 'var(--cwm-warning)' : tone;
+  return (
+    <div style={{ padding: '10px 12px', background: 'var(--cwm-surface-soft)', borderRadius: 9, border: '1px solid var(--cwm-border)' }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: tone, letterSpacing: '0.05em', textTransform: 'uppercase' }}>{name}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--cwm-text)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.15, marginTop: 3 }}>
+        {rpm.toLocaleString()} <span style={{ fontSize: 10, color: 'var(--cwm-text-faint)', fontWeight: 600 }}>RPM</span>
+      </div>
+      {/* Percentage shifted below the number */}
+      <div style={{ fontSize: 12, fontWeight: 700, color: barColor, fontVariantNumeric: 'tabular-nums', marginTop: 1 }}>
+        {pct.toFixed(1)}<span style={{ fontSize: 9, color: 'var(--cwm-text-faint)', fontWeight: 600 }}> %</span>
+      </div>
+      <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 1.5, overflow: 'hidden', marginTop: 5 }}>
+        <div style={{ width: `${barPct}%`, height: '100%', background: barColor, transition: 'width 0.25s ease' }} />
+      </div>
+      <div style={{ fontSize: 8.5, color: 'var(--cwm-text-faint)', marginTop: 4, letterSpacing: '0.02em' }}>{note}</div>
+    </div>
+  );
+}
+
 function Gauge({
   label, value, unit, max, v, critical, inverted, min = 0, sublabel,
 }: {
@@ -461,16 +568,100 @@ function StatusGauge({ label, ok, detail }: { label: string; ok: boolean; detail
   );
 }
 
-function EmptyMini({ label }: { label: string }) {
+// ── Temperature stations trail (T1 → T6) ────────────────────────────────────
+const STATION_META: { key: keyof ReturnType<typeof deriveTempStations>; label: string; desc: string; color: string }[] = [
+  { key: 'T1c', label: 'T1', desc: 'inlet',        color: '#5b8de0' },
+  { key: 'T2c', label: 'T2', desc: 'compressor',   color: '#38bdf8' },
+  { key: 'T4c', label: 'T4', desc: 'TIT',          color: '#f59e0b' },
+  { key: 'T5c', label: 'T5 · TGT', desc: 'inter-turbine', color: '#f97316' },
+  { key: 'T6c', label: 'T6', desc: 'exhaust',      color: '#a855f7' },
+];
+
+function StationTrail({ temps }: { temps: ReturnType<typeof deriveTempStations> }) {
   return (
-    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--cwm-text-faint)' }}>
-      {label} trace will appear here…
+    <div style={{ display: 'flex', alignItems: 'stretch', gap: 6, flexWrap: 'wrap' }}>
+      {STATION_META.map((st, i) => (
+        <div key={st.key} style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 120px' }}>
+          <div style={{ flex: 1, padding: '8px 10px', background: 'var(--cwm-surface-soft)', borderRadius: 8, borderLeft: `3px solid ${st.color}` }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: st.color, letterSpacing: '0.04em' }}>{st.label}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--cwm-text)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>
+              {temps[st.key].toFixed(0)}<span style={{ fontSize: 9, color: 'var(--cwm-text-faint)' }}> °C</span>
+            </div>
+            <div style={{ fontSize: 8.5, color: 'var(--cwm-text-faint)' }}>{st.desc}</div>
+          </div>
+          {i < STATION_META.length - 1 && <span style={{ color: 'var(--cwm-text-faint)', fontSize: 12 }}>→</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RatioCard({ r }: { r: ReturnType<typeof deriveSectionRatios>[number] }) {
+  return (
+    <div className="gtsu-metric">
+      <div className="m-label">{r.label}</div>
+      <div className="m-value" style={{ color: 'var(--cwm-accent)' }}>{r.ratio.toFixed(3)}<span style={{ fontSize: 10, color: 'var(--cwm-text-faint)', fontWeight: 600 }}> ratio</span></div>
+      <div className="m-sub">{r.inLabel} {r.inC.toFixed(0)}°C → {r.outLabel} {r.outC.toFixed(0)}°C</div>
+    </div>
+  );
+}
+
+function PressureCompareBar({ pressure }: { pressure: ReturnType<typeof comparePressureRatio> }) {
+  const col = pressure.status === 'bad' ? 'var(--cwm-danger)' : pressure.status === 'warn' ? 'var(--cwm-warning)' : 'var(--cwm-success)';
+  // Scale bars against a common 0..4.5 range
+  const scale = (v: number) => Math.min(100, (v / 4.5) * 100);
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+      <div>
+        <div style={{ fontSize: 10, color: 'var(--cwm-text-faint)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Normal (design)</div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--cwm-text)', fontVariantNumeric: 'tabular-nums' }}>{pressure.nominal.toFixed(2)}<span style={{ fontSize: 11, color: 'var(--cwm-text-faint)' }}> :1</span></div>
+        <div style={{ height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', marginTop: 6 }}>
+          <div style={{ width: `${scale(pressure.nominal)}%`, height: '100%', background: 'var(--cwm-text-faint)' }} />
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 10, color: 'var(--cwm-text-faint)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Current</div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: col, fontVariantNumeric: 'tabular-nums' }}>
+          {pressure.current.toFixed(2)}<span style={{ fontSize: 11, color: 'var(--cwm-text-faint)' }}> :1</span>
+          <span style={{ fontSize: 12, marginLeft: 8, color: col }}>{pressure.deltaPct > 0 ? '+' : ''}{pressure.deltaPct}%</span>
+        </div>
+        <div style={{ height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', marginTop: 6 }}>
+          <div style={{ width: `${scale(pressure.current)}%`, height: '100%', background: col, transition: 'width 0.25s ease' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MiniTrace({ title, series, color, label }: { title: string; series: { x: number; y: number }[]; color: string; label: string }) {
+  if (series.length <= 1) {
+    return (
+      <div style={{ height: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--cwm-text-faint)', background: 'var(--cwm-surface-soft)', borderRadius: 9 }}>
+        {title} — trace appears during playback…
+      </div>
+    );
+  }
+  return <LineChart data={series} title={title} color={color} yAxisLabel={label} height={130} />;
+}
+
+function FormulaList() {
+  return (
+    <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 10 }}>
+      {ENGINE_FORMULAS.map(f => (
+        <div key={f.symbol} style={{ padding: '10px 12px', background: 'var(--cwm-surface-soft)', border: '1px solid var(--cwm-border)', borderRadius: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--cwm-accent)' }}>{f.symbol}</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--cwm-text)' }}>{f.name}</span>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--cwm-text-muted)', fontFamily: 'monospace', marginTop: 5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{f.formula}</div>
+          <div style={{ fontSize: 9.5, color: 'var(--cwm-text-faint)', marginTop: 5, fontStyle: 'italic', lineHeight: 1.5 }}>{f.note}</div>
+        </div>
+      ))}
     </div>
   );
 }
 
 // ── Live mode synthesizer (placeholder until real rig connected) ────────
-
 function synthLiveFrame(t: number): CycleTraceSample {
   const ramp = Math.min(1, t / 40);
   const phase: StartPhase =
@@ -503,15 +694,6 @@ function synthLiveFrame(t: number): CycleTraceSample {
 }
 
 // ── Inline styles ────────────────────────────────────────────────────────
-
-const primaryBtn: React.CSSProperties = {
-  padding: '10px 22px', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em',
-  background: 'var(--cwm-accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer',
-};
-const ghostBtn: React.CSSProperties = {
-  padding: '10px 22px', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em',
-  background: 'transparent', color: 'var(--cwm-text)', border: '1px solid var(--cwm-border)', borderRadius: 6, cursor: 'pointer',
-};
 const tabBtn: React.CSSProperties = {
   padding: '7px 16px', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
   border: 'none', cursor: 'pointer',

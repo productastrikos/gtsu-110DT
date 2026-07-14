@@ -58,7 +58,7 @@ export default function CWMLoginPage({ onLogin, theme = 'dark', onThemeToggle }:
         {/* Feature list */}
         <div className="space-y-4">
           {[
-            { icon: '📊', label: 'Live Telemetry Dashboard', desc: 'Real-time JPT1, NGG, P2/P1 and health KPIs' },
+            { icon: '📊', label: 'Live Telemetry Dashboard', desc: 'Real-time TGT, N1/N2, P2/P1 and health KPIs' },
             { icon: '🧠', label: 'PHM & Prognostics',        desc: 'RUL prediction, hot-start risk, virtual sensor diagnostics' },
             { icon: '⚡', label: 'Start Sequence Sim',       desc: 'Animated light-up timeline with AI advisories' },
             { icon: '🔩', label: 'FMEA Analysis',             desc: 'Start-cycle failure modes and RPN scoring' },

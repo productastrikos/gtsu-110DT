@@ -18,9 +18,10 @@ interface AlertPanelProps {
   alerts?: Alert[];
   onClose: () => void;
   onAcknowledge?: (id: string) => void;
+  onSelect?: (alert: Alert) => void;
 }
 
-export default function AlertPanel({ alerts = [], onClose, onAcknowledge }: AlertPanelProps) {
+export default function AlertPanel({ alerts = [], onClose, onAcknowledge, onSelect }: AlertPanelProps) {
   const active = alerts.filter(a => !a.acknowledged);
   const grouped = {
     critical: active.filter(a => a.type === 'critical'),
@@ -50,7 +51,12 @@ export default function AlertPanel({ alerts = [], onClose, onAcknowledge }: Aler
                 {type} ({grouped[type].length})
               </div>
               {grouped[type].slice(0, 15).map(alert => (
-                <div key={alert.alertId} className={`${typeColors[type].bg} border ${typeColors[type].border} rounded-lg p-2.5 mb-1.5`}>
+                <div
+                  key={alert.alertId}
+                  onClick={() => onSelect?.(alert)}
+                  role={onSelect ? 'button' : undefined}
+                  className={`${typeColors[type].bg} border ${typeColors[type].border} rounded-lg p-2.5 mb-1.5 transition-transform ${onSelect ? 'cursor-pointer hover:-translate-y-px' : ''}`}
+                >
                   <div className="flex items-start space-x-2">
                     <div className={`w-2 h-2 rounded-full mt-1 shrink-0 ${typeColors[type].dot} ${type === 'critical' ? 'animate-pulse' : ''}`} />
                     <div className="flex-1 min-w-0">
@@ -58,12 +64,17 @@ export default function AlertPanel({ alerts = [], onClose, onAcknowledge }: Aler
                       <p className="text-[11px] mt-0.5 line-clamp-2" style={{ color: 'var(--cwm-text-muted)' }}>{alert.message}</p>
                       <div className="flex items-center justify-between mt-1.5">
                         <span className="text-[10px]" style={{ color: 'var(--cwm-text-faint)' }}>{timeSince(alert.createdAt)}</span>
-                        {onAcknowledge && (
-                          <button onClick={() => onAcknowledge(alert.alertId)}
-                            className="text-[10px] font-medium" style={{ color: 'var(--cwm-accent)' }}>
-                            Acknowledge
-                          </button>
-                        )}
+                        <div className="flex items-center gap-3">
+                          {onSelect && (
+                            <span className="text-[10px] font-medium" style={{ color: 'var(--cwm-accent)' }}>Details →</span>
+                          )}
+                          {onAcknowledge && (
+                            <button onClick={(e) => { e.stopPropagation(); onAcknowledge(alert.alertId); }}
+                              className="text-[10px] font-medium" style={{ color: 'var(--cwm-text-faint)' }}>
+                              Acknowledge
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>

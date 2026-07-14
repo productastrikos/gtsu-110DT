@@ -6,7 +6,7 @@ interface ProfilePageProps {
 }
 
 const ACTIVITY_LOG = [
-  { action:'Acknowledged alert ENG-001 (JPT1 approaching limit)',      time:'09:42', type:'alert'   },
+  { action:'Acknowledged alert ENG-001 (TGT approaching limit)',       time:'09:42', type:'alert'   },
   { action:'Ran Normal Start simulation — advisories applied',          time:'09:18', type:'sim'     },
   { action:'Viewed PHM Dashboard — RUL trend analysis',                time:'09:10', type:'nav'     },
   { action:'Acknowledged advisory: Start sequence optimisation',        time:'08:55', type:'advisory'},

@@ -1,8 +1,28 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useData } from '../../services/socket';
+import type { Alert } from '../../services/socket';
 import AlertPanel from '../AlertPanel';
+import AlertDetailModal from '../AlertDetailModal';
 import AdvisoryPanel from '../AdvisoryPanel';
+
+/* Where each alert's "Investigate" button leads */
+const ROUTE_LABELS: Record<string, string> = {
+  '/':           'Post-Flight Analysis',
+  '/simulator':  '3D Process Simulator',
+  '/life-cycle': 'Life Cycle & Reliability',
+  '/sandbox':    'Performance Sandbox',
+};
+function routeForAlert(a: Alert): string {
+  if (a.route) return a.route;
+  switch (a.category) {
+    case 'thermal':
+    case 'vibration': return '/simulator';
+    case 'mechanical':
+    case 'lifecycle': return '/life-cycle';
+    default:          return '/';
+  }
+}
 
 /* ─── Navigation structure ─────────────────────────────── */
 const NAV_SECTIONS = [
@@ -80,6 +100,7 @@ export default function Layout({ children, user, onLogout, theme = 'dark', onThe
   const [showAlerts,   setShowAlerts]   = useState(false);
   const [showAdvisory, setShowAdvisory] = useState(false);
   const [showProfile,  setShowProfile]  = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [time,         setTime]         = useState(new Date());
   const [sidebarOpen,  setSidebarOpen]  = useState(true);
   const [searchQuery,  setSearchQuery]  = useState('');
@@ -353,7 +374,7 @@ export default function Layout({ children, user, onLogout, theme = 'dark', onThe
 
           {showAlerts && (
             <div className="w-80 shrink-0 overflow-hidden animate-slide-up border-l border-cwm-border" style={{ background: 'var(--cwm-surface)' }}>
-              <AlertPanel alerts={alerts} onClose={() => setShowAlerts(false)} onAcknowledge={acknowledgeAlert} />
+              <AlertPanel alerts={alerts} onClose={() => setShowAlerts(false)} onAcknowledge={acknowledgeAlert} onSelect={setSelectedAlert} />
             </div>
           )}
 
@@ -364,6 +385,22 @@ export default function Layout({ children, user, onLogout, theme = 'dark', onThe
           )}
         </div>
       </div>
+
+      {/* Alert detail popup → redirect to the relevant page */}
+      {selectedAlert && (
+        <AlertDetailModal
+          alert={selectedAlert}
+          destinationLabel={ROUTE_LABELS[routeForAlert(selectedAlert)] ?? 'Details'}
+          onClose={() => setSelectedAlert(null)}
+          onAcknowledge={() => { acknowledgeAlert(selectedAlert.alertId); setSelectedAlert(null); }}
+          onInvestigate={() => {
+            const dest = routeForAlert(selectedAlert);
+            setSelectedAlert(null);
+            setShowAlerts(false);
+            navigate(dest);
+          }}
+        />
+      )}
     </div>
   );
 }

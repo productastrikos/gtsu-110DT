@@ -188,7 +188,7 @@ function generateCycle(seed: CycleSeed): StartCycle {
   if (faultReason) {
     improvement = improvementForFault(faultReason);
   } else if (efficiency < 80) {
-    improvement = 'Tune fuel schedule between 8-22s to flatten JPT1 peak; expected 3-6 % SFC gain.';
+    improvement = 'Tune fuel schedule between 8-22s to flatten TGT peak; expected 3-6 % SFC gain.';
   }
 
   return {
@@ -216,7 +216,7 @@ function improvementForFault(reason: FaultReason): string {
     case 'slow-light-up':     return 'Advance igniter timing 0.4s; verify P2/P1 above 3.50 before fuel command. Borescope combustor.';
     case 'fuel-overshoot':    return 'Calibrate LVDT feedback on metering valve. Rate-limit stepper command above 6 kg/h.';
     case 'compressor-stall':  return 'Open IGV by 2°. Inspect blades for FOD. Limit Ngg ramp above 80 %.';
-    case 'sensor-drift':      return 'Swap JPT1 thermocouple. Run channel calibration. Verify connector resistance.';
+    case 'sensor-drift':      return 'Swap TGT thermocouple. Run channel calibration. Verify connector resistance.';
     case 'high-vibration':    return 'Bearing run-out check; rotor balance. Inspect turbine tip clearance.';
   }
 }
@@ -426,12 +426,12 @@ export function simulateSandbox(inputs: SandboxInputs): SandboxOutputs {
 
   // ── Feasibility ───────────────────────────────────────────────
   const warnings: string[] = [];
-  if (jpt1Peak > 900) warnings.push('JPT1 peak exceeds 900 °C ground limit — hot-start risk.');
+  if (jpt1Peak > 900) warnings.push('TGT peak exceeds 900 °C ground limit — hot-start risk.');
   if (surgeMargin < 6) warnings.push('Surge margin below safe threshold (<6 %) — compressor stall possible.');
   if (sfcKgPerKWh > 0.95) warnings.push('SFC above 0.95 kg/kWh — uneconomical regime.');
   if (rpm > 105) warnings.push('RPM above 105 % over-speed limit.');
   if (fuel > 9.5) warnings.push('Fuel flow above hardware envelope (>9.5 kg/h).');
-  if (oat > 40) warnings.push(`High OAT (${oat.toFixed(0)} °C) — reduced air density; elevated JPT1 and lower surge margin expected.`);
+  if (oat > 40) warnings.push(`High OAT (${oat.toFixed(0)} °C) — reduced air density; elevated TGT and lower surge margin expected.`);
   if (oat < -30) warnings.push(`Low OAT (${oat.toFixed(0)} °C) — cold-soak start; verify oil temperature and gearbox readiness.`);
   const feasible = warnings.length === 0;
 
@@ -456,7 +456,7 @@ export const SANDBOX_BASELINE: SandboxInputs = {
 // ── Fault reason → human label ──────────────────────────────────────────────
 
 export const FAULT_LABELS: Record<FaultReason, string> = {
-  'hot-start':         'Hot Start (JPT1 exceedance)',
+  'hot-start':         'Hot Start (TGT exceedance)',
   'hung-start':        'Hung Start (Ngg stall)',
   'slow-light-up':     'Slow Light-Up',
   'fuel-overshoot':    'Fuel Schedule Overshoot',

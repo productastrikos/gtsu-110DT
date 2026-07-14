@@ -135,10 +135,10 @@ export function buildSimulatorHotspots(
 
   const wearOf = (id: string) => wear.find(w => w.id === id)?.wearPct ?? 0;
 
-  // HPT — JPT1 vs 900°C ground limit / 1020°C flight limit
+  // HPT — TGT vs 900°C ground limit / 1020°C flight limit
   const hptSeverity: HotspotSeverity = frame.jpt1 > 1020 ? 'bad' : frame.jpt1 > 900 ? 'orange' : frame.jpt1 > 780 ? 'warn' : 'good';
 
-  // Combustor — light-up presence & JPT1 thermal gradient
+  // Combustor — light-up presence & TGT thermal gradient
   const combSeverity: HotspotSeverity = frame.jpt1 > 900 ? 'bad' : frame.jpt1 > 850 ? 'orange' : frame.jpt1 > 700 ? 'warn' : 'good';
 
   // HP Compressor — P2/P1 vs nominal 3.86, fouling detection
@@ -182,7 +182,7 @@ export function buildSimulatorHotspots(
       position: COMPONENT_POSITION['combustor-liner'],
       label: SHORT_LABEL['combustor-liner'],
       value: `${frame.jpt1.toFixed(0)}°C`,
-      metric: `Combustor outlet · hot-spot 900°C · Ngg ${frame.ngg > 12625 ? '✓ lit' : '↑ cranking'} · wear ${wearOf('combustor-liner').toFixed(0)} %`,
+      metric: `Combustor outlet · hot-spot 900°C · N1 ${frame.ngg > 12625 ? '✓ lit' : '↑ cranking'} · wear ${wearOf('combustor-liner').toFixed(0)} %`,
       severity: combSeverity,
     },
     {
@@ -190,7 +190,7 @@ export function buildSimulatorHotspots(
       position: COMPONENT_POSITION['hpt-blades'],
       label: SHORT_LABEL['hpt-blades'],
       value: `${frame.jpt1.toFixed(0)}°C`,
-      metric: `JPT1 · GROUND ≤900°C / FLIGHT ≤1020°C · creep life · Ngg ${frame.ngg.toLocaleString()} RPM${lightUpAchieved ? ' ✓' : ''}`,
+      metric: `TGT · GROUND ≤900°C / FLIGHT ≤1020°C · creep life · N1 ${frame.ngg.toLocaleString()} RPM${lightUpAchieved ? ' ✓' : ''}`,
       severity: hptSeverity,
     },
     {
@@ -223,7 +223,7 @@ export function buildSandboxHotspots(
   outputs:  SandboxOutputs,
   baseline: SandboxOutputs | null,
 ): EngineHotspot[] {
-  // HPT — JPT1 peak vs 900°C ground / 1020°C flight limit
+  // HPT — TGT peak vs 900°C ground / 1020°C flight limit
   const jptSev: HotspotSeverity =
     outputs.jpt1PeakC > 1020 ? 'bad' :
     outputs.jpt1PeakC > 900  ? 'orange' :
@@ -292,7 +292,7 @@ export function buildSandboxHotspots(
       position: COMPONENT_POSITION['hpt-blades'],
       label: SHORT_LABEL['hpt-blades'],
       value: `${outputs.jpt1PeakC.toFixed(0)}°C`,
-      metric: `Predicted JPT1 peak · GROUND ≤900°C / FLIGHT ≤1020°C · creep life consumption`,
+      metric: `Predicted TGT peak · GROUND ≤900°C / FLIGHT ≤1020°C · creep life consumption`,
       severity: jptSev,
       ...mkDelta(outputs.jpt1PeakC, baseline?.jpt1PeakC),
     },

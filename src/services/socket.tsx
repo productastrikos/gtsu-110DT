@@ -15,6 +15,10 @@ export interface Alert {
   assetId: string;
   acknowledged: boolean;
   createdAt: string;
+  /** Recommended follow-up action, shown in the alert detail popup */
+  recommendedAction?: string;
+  /** Route the popup's "Investigate" button navigates to */
+  route?: string;
 }
 
 export interface Advisory {
@@ -32,12 +36,14 @@ const SEED_ALERTS: Alert[] = [
     alertId: 'ENG-001',
     type: 'critical',
     category: 'thermal',
-    title: 'JPT1 Approaching Operational Limit',
-    message: 'Jet Pipe Temperature at 887 °C — within 13 °C of ground-start ceiling. Recommend reducing power setting or initiating active cool-down.',
-    zone: 'Turbine Section',
+    title: 'TGT Approaching Operational Limit',
+    message: 'Turbine Gas Temperature at 887 °C — within 13 °C of the 900 °C ground-start ceiling. Recommend reducing power setting or initiating active cool-down.',
+    zone: 'Gas-Generator Turbine',
     assetId: 'ENG-GTSU-001',
     acknowledged: false,
     createdAt: _ago(8),
+    recommendedAction: 'Open the 3D Process Simulator and replay the offending cycle to inspect the TGT trace and fuel schedule at light-up.',
+    route: '/simulator',
   },
   {
     alertId: 'ENG-002',
@@ -49,28 +55,34 @@ const SEED_ALERTS: Alert[] = [
     assetId: 'ENG-GTSU-001',
     acknowledged: false,
     createdAt: _ago(22),
+    recommendedAction: 'Review compressor wear and remaining life on the Life Cycle & Reliability page.',
+    route: '/life-cycle',
   },
   {
     alertId: 'ENG-003',
     type: 'warning',
     category: 'vibration',
-    title: 'HP Turbine Vibration Anomaly',
-    message: 'HP turbine vibration at 4.2 mm/s RMS, exceeding the 3.5 mm/s nominal baseline. Monitor trend at next power cycle.',
-    zone: 'Turbine Section',
+    title: 'Power-Turbine Vibration Anomaly',
+    message: 'Power/free-turbine vibration at 4.2 mm/s RMS, exceeding the 3.5 mm/s nominal baseline. Monitor trend at next power cycle.',
+    zone: 'Power / Free Turbine',
     assetId: 'ENG-GTSU-001',
     acknowledged: false,
     createdAt: _ago(45),
+    recommendedAction: 'Replay the latest cycle in the 3D Process Simulator and watch the vibration gauge and bearing hotspot.',
+    route: '/simulator',
   },
   {
     alertId: 'ENG-004',
     type: 'info',
     category: 'lifecycle',
-    title: 'HPT Blade RUL Below 800 FH',
-    message: 'High-pressure turbine blade remaining useful life estimate has crossed the 800-hour threshold. Next scheduled borescope in 120 FH.',
-    zone: 'Turbine Section',
+    title: 'HP-Turbine Blade RUL Below 800 FH',
+    message: 'HP (gas-generator) turbine blade remaining useful life estimate has crossed the 800-hour threshold. Next scheduled borescope in 120 FH.',
+    zone: 'Gas-Generator Turbine',
     assetId: 'ENG-GTSU-001',
     acknowledged: true,
     createdAt: _ago(90),
+    recommendedAction: 'Open the Life Cycle & Reliability page to see the total-life segments and the fail-first forecast.',
+    route: '/life-cycle',
   },
   {
     alertId: 'ENG-005',
@@ -82,6 +94,8 @@ const SEED_ALERTS: Alert[] = [
     assetId: 'ENG-GTSU-001',
     acknowledged: true,
     createdAt: _ago(135),
+    recommendedAction: 'No action required. Review the latest post-flight analysis for context.',
+    route: '/',
   },
 ];
 
@@ -90,7 +104,7 @@ const SEED_ADVISORIES: Advisory[] = [
   {
     id: 'ADV-001',
     title: 'Start Sequence Optimisation',
-    message: 'Analysis of the last 12 start cycles recommends reducing starter-motor dwell time by 0.8 s. Projected outcome: peak JPT reduced by ~18 °C, HPT blade life extended by an estimated 4%.',
+    message: 'Analysis of the last 12 start cycles recommends reducing starter-motor dwell time by 0.8 s. Projected outcome: peak TGT reduced by ~18 °C, HP-turbine blade life extended by an estimated 4%.',
     type: 'optimization',
     acknowledged: false,
     createdAt: _ago(12),

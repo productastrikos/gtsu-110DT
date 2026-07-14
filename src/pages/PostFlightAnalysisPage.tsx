@@ -13,9 +13,12 @@ import { useNavigate } from 'react-router-dom';
 import { useGTSUStore } from '../store/useGTSUStore';
 import { FAULT_LABELS, accumulateWear } from '../lib/flightSimulator';
 import { buildPostFlightHotspots } from '../lib/engineHotspots';
-import type { StartCycle, CycleStatus, FaultReason, FlightRecord, BackendFlight } from '../types/engine';
+import type { StartCycle, CycleStatus, FaultReason, FlightRecord, BackendFlight, ComponentWearRecord } from '../types/engine';
 import { LineChart } from '../components/LineChart';
-import { EngineModel3D, HotspotLegend } from '../components/EngineModel3D';
+import { EngineModel3D, HotspotLegend, SectionLegend, LabelToggle } from '../components/EngineModel3D';
+import {
+  deriveN2, deriveSectionRatios, comparePressureRatio, NOMINAL_P2P1, MAX_NPT_RPM,
+} from '../lib/engineDerived';
 
 const STATUS_COLORS: Record<CycleStatus, string> = {
   success:  'var(--cwm-success)',
@@ -51,6 +54,8 @@ export default function PostFlightAnalysisPage() {
   const [durationHrs, setDurationHrs] = useState(75);
   const [statusFilter, setStatusFilter] = useState<CycleStatus | 'all'>('all');
   const [libraryOpen, setLibraryOpen] = useState(true);
+  const [showLabels, setShowLabels] = useState(true);
+  const [showSections, setShowSections] = useState(true);
 
   // Fetch flight library on mount
   useEffect(() => {
@@ -82,6 +87,19 @@ export default function PostFlightAnalysisPage() {
     return latestFlight.cycles.map(c => ({ x: c.cycleNumber, y: c.efficiency }));
   }, [latestFlight]);
 
+  const peakTgtOverTime = useMemo(
+    () => latestFlight ? latestFlight.cycles.map(c => ({ x: c.cycleNumber, y: c.peakJpt1 })) : [],
+    [latestFlight],
+  );
+  const n1MaxOverTime = useMemo(
+    () => latestFlight ? latestFlight.cycles.map(c => ({ x: c.cycleNumber, y: c.maxNggPct })) : [],
+    [latestFlight],
+  );
+  const fuelOverTime = useMemo(
+    () => latestFlight ? latestFlight.cycles.map(c => ({ x: c.cycleNumber, y: c.fuelUsedKg })) : [],
+    [latestFlight],
+  );
+
   // Wear AS-OF the previous flight (used to compute per-component delta)
   const previousWear = useMemo(() => {
     if (flights.length < 2) return null;
@@ -94,7 +112,7 @@ export default function PostFlightAnalysisPage() {
   );
 
   // Worst-case frame approximation for thermal tint: use the latest flight's
-  // most stressful cycle (highest peak JPT1). Falls back to a neutral state.
+  // most stressful cycle (highest peak TGT). Falls back to a neutral state.
   const headlineFrame = useMemo(() => {
     if (!latestFlight) return null;
     const worst = latestFlight.cycles
@@ -159,10 +177,6 @@ export default function PostFlightAnalysisPage() {
                   flights={backendFlights}
                   loadingId={loadingFlightId}
                   onAnalyse={async (id) => {
-                    await loadBackendFlight(id);
-                    navigate('/simulator');
-                  }}
-                  onSimulate={async (id) => {
                     await loadBackendFlight(id);
                     navigate('/simulator');
                   }}
@@ -235,8 +249,8 @@ export default function PostFlightAnalysisPage() {
           onClick={() => { clearAll(); }}
           style={{
             padding: '7px 14px', fontSize: 11, fontWeight: 600, letterSpacing: '0.04em',
-            color: 'var(--cwm-text-muted)', background: 'transparent',
-            border: '1px solid var(--cwm-border)', borderRadius: 6, cursor: 'pointer',
+            color: 'var(--cwm-danger)', background: 'var(--cwm-danger-bg)',
+            border: '1px solid var(--cwm-danger-border)', borderRadius: 6, cursor: 'pointer',
           }}
         >
           CLEAR ALL DATA
@@ -253,6 +267,9 @@ export default function PostFlightAnalysisPage() {
         <KPI label="Avg Efficiency" value={`${flight.avgEfficiency.toFixed(0)}%`} tone={flight.avgEfficiency > 80 ? 'good' : flight.avgEfficiency > 65 ? 'warn' : 'bad'} />
       </div>
 
+      {/* ── Pre-Flight Readiness quick-look ───────────────────── */}
+      <PreFlightReadiness wear={wear} latestFlight={flight} onSeeLifeCycle={() => navigate('/life-cycle')} />
+
       {/* ── Peak-Cycle Engineering Parameters ─────────────────── */}
       <PeakTelemetryPanel flight={flight} />
 
@@ -260,15 +277,22 @@ export default function PostFlightAnalysisPage() {
       <div className="ds-panel" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px 6px 16px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cwm-text)' }}>Engine Component Status</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cwm-text)' }}>GTSU-110 Engine — Component Status</div>
             <div style={{ fontSize: 10, color: 'var(--cwm-text-faint)', marginTop: 2, letterSpacing: '0.02em' }}>
-              Wear per component (cumulative across all flights) · color from threshold · delta vs previous flight
+              Free-turbine turboshaft · labelled by section · wear per component (cumulative) · delta vs previous flight
             </div>
           </div>
-          <HotspotLegend items={hotspots} />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <HotspotLegend items={hotspots} />
+            <SectionLegend />
+            <div style={{ display: 'flex', gap: 14 }}>
+              <LabelToggle label="Metric labels" on={showLabels} onChange={setShowLabels} />
+              <LabelToggle label="Section tags" on={showSections} onChange={setShowSections} />
+            </div>
+          </div>
         </div>
-        <div style={{ height: 360, position: 'relative' }}>
-          <EngineModel3D frame={headlineFrame} hotspots={hotspots} />
+        <div style={{ height: 380, position: 'relative' }}>
+          <EngineModel3D frame={headlineFrame} hotspots={hotspots} showLabels={showLabels} showSections={showSections} />
         </div>
       </div>
 
@@ -284,6 +308,28 @@ export default function PostFlightAnalysisPage() {
         <div className="ds-panel" style={{ padding: 16 }}>
           <SectionHead title="Fault Reasons" subtitle="Breakdown of failed and degraded cycles" />
           <FaultBreakdown items={faultBreakdown} />
+        </div>
+      </div>
+
+      {/* ── Cycle trend graphs ─────────────────────────────────── */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div className="ds-panel" style={{ padding: 16 }}>
+          <SectionHead title="Peak TGT per Cycle" subtitle="Turbine gas temp · limit 900°C ground" compact />
+          <div style={{ height: 200, marginTop: 8 }}>
+            <LineChart data={peakTgtOverTime} color="#f97316" yAxisLabel="TGT °C" xAxisLabel="Cycle #" height={190} />
+          </div>
+        </div>
+        <div className="ds-panel" style={{ padding: 16 }}>
+          <SectionHead title="Max N1 per Cycle" subtitle="Gas-generator spool speed %" compact />
+          <div style={{ height: 200, marginTop: 8 }}>
+            <LineChart data={n1MaxOverTime} color="#5b8de0" yAxisLabel="N1 %" xAxisLabel="Cycle #" height={190} />
+          </div>
+        </div>
+        <div className="ds-panel" style={{ padding: 16 }}>
+          <SectionHead title="Fuel per Cycle" subtitle="Fuel consumed per start (kg)" compact />
+          <div style={{ height: 200, marginTop: 8 }}>
+            <LineChart data={fuelOverTime} color="#38bdf8" yAxisLabel="kg" xAxisLabel="Cycle #" height={190} />
+          </div>
         </div>
       </div>
 
@@ -316,6 +362,9 @@ export default function PostFlightAnalysisPage() {
           }}
         />
       </div>
+
+      {/* ── Flight Records / Event Log ─────────────────────────── */}
+      <FlightRecordsPanel flights={flights} />
 
       {/* ── Cumulative context + life cycle hint ───────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -454,12 +503,16 @@ function PeakTelemetryPanel({ flight }: { flight: FlightRecord }) {
   if (!frame) return null;
 
   const milHex = `0x${(frame.milBusWord ?? 0).toString(16).toUpperCase().padStart(4, '0')}`;
-  const nggRpm = Math.round(worst.maxNggPct / 100 * 22000);
+  const n1Rpm = Math.round(worst.maxNggPct / 100 * 22000);
+  const n2 = deriveN2(frame);
+  const ratios = deriveSectionRatios(frame);
+  const pressure = comparePressureRatio(frame);
 
   const jptStatus = worst.peakJpt1 > 900 ? 'bad' : worst.peakJpt1 > 870 ? 'warn' : 'good';
   const p2Status  = worst.minP2p1 < 3.5 || worst.minP2p1 > 4.1 ? 'bad'
                   : worst.minP2p1 < 3.65 || worst.minP2p1 > 4.0 ? 'warn' : 'good';
   const nggStatus = worst.maxNggPct > 95 ? 'bad' : worst.maxNggPct > 90 ? 'warn' : 'good';
+  const n2Status: 'good' | 'warn' | 'bad' = n2.pct > 98 ? 'bad' : n2.pct > 92 ? 'warn' : 'good';
   const oatStatus: 'good' | 'warn' | 'bad' = frame.oat > 50 || frame.oat < -40 ? 'warn' : 'good';
   const stpStatus: 'good' | 'warn' | 'bad' = (frame.stepperPos ?? 0) > 240 ? 'warn' : 'good';
   const secStatus: 'good' | 'warn' | 'bad' = frame.secuHealthy ? (frame.bitPass ? 'good' : 'warn') : 'bad';
@@ -468,26 +521,32 @@ function PeakTelemetryPanel({ flight }: { flight: FlightRecord }) {
     <div className="ds-panel" style={{ padding: 16 }}>
       <SectionHead
         title="Peak-Cycle Engineering Parameters"
-        subtitle={`Cycle #${worst.cycleNumber} (highest JPT1) · thresholds: JPT1 900°C ground / 1020°C flight · Ngg light-up >12,625 RPM`}
+        subtitle={`Cycle #${worst.cycleNumber} (highest TGT) · TGT 900°C ground / 1020°C flight · N1 light-up >12,625 RPM · N2 free turbine`}
       />
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
         <ParamCard
-          label="JPT1 (Thermodynamic)"
+          label="TGT (Turbine Gas Temp)"
           value={`${worst.peakJpt1.toFixed(0)}°C`}
           limit="≤900°C ground · ≤1020°C flight"
           status={jptStatus}
         />
         <ParamCard
-          label="Pressure Ratio P2/P1"
-          value={`${worst.minP2p1.toFixed(3)}:1`}
-          limit="Nominal 3.78–3.90 (surge margin)"
-          status={p2Status}
-        />
-        <ParamCard
-          label="Gas Generator Ngg"
-          value={`${worst.maxNggPct.toFixed(1)}% / ${nggRpm.toLocaleString()} RPM`}
+          label="N1 · Gas Generator"
+          value={`${worst.maxNggPct.toFixed(1)}% / ${n1Rpm.toLocaleString()} RPM`}
           limit="Light-up >12,625 RPM · self-sustain >57.4%"
           status={nggStatus}
+        />
+        <ParamCard
+          label="N2 · Power Turbine"
+          value={`${n2.pct.toFixed(1)}% / ${n2.rpm.toLocaleString()} RPM`}
+          limit={`Free turbine · ref ${MAX_NPT_RPM.toLocaleString()} RPM`}
+          status={n2Status}
+        />
+        <ParamCard
+          label="Pressure Ratio P2/P1"
+          value={`${worst.minP2p1.toFixed(3)}:1`}
+          limit={`Nominal ${NOMINAL_P2P1} (surge margin)`}
+          status={p2Status}
         />
         <ParamCard
           label="OAT (Env. / ADU)"
@@ -508,6 +567,32 @@ function PeakTelemetryPanel({ flight }: { flight: FlightRecord }) {
           status={secStatus}
         />
       </div>
+
+      {/* ── P2/P1 normal vs current ─────────────────────────── */}
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--cwm-border)' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>
+          Compressor Pressure Ratio · Normal vs Current (peak cycle)
+        </div>
+        <PressureCompareInline pressure={pressure} />
+      </div>
+
+      {/* ── Section temperature ratios ──────────────────────── */}
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--cwm-border)' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>
+          Temperature Ratios · inlet/outlet per section (absolute K)
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {ratios.map(r => (
+            <div key={r.key} className="gtsu-metric">
+              <div className="m-label">{r.label}</div>
+              <div className="m-value" style={{ color: 'var(--cwm-accent)' }}>
+                {r.ratio.toFixed(3)}<span style={{ fontSize: 10, color: 'var(--cwm-text-faint)', fontWeight: 600 }}> ratio</span>
+              </div>
+              <div className="m-sub">{r.inLabel} {r.inC.toFixed(0)}°C → {r.outLabel} {r.outC.toFixed(0)}°C</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -521,6 +606,32 @@ function ParamCard({ label, value, limit, status }: {
       <div style={{ fontSize: 9, color: 'var(--cwm-text-faint)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 5 }}>{label}</div>
       <div style={{ fontSize: 15, fontWeight: 700, color: col, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{value}</div>
       <div style={{ fontSize: 9, color: 'var(--cwm-text-faint)', marginTop: 4, fontStyle: 'italic', lineHeight: 1.4 }}>{limit}</div>
+    </div>
+  );
+}
+
+function PressureCompareInline({ pressure }: { pressure: ReturnType<typeof comparePressureRatio> }) {
+  const col = pressure.status === 'bad' ? 'var(--cwm-danger)' : pressure.status === 'warn' ? 'var(--cwm-warning)' : 'var(--cwm-success)';
+  const scale = (v: number) => Math.min(100, (v / 4.5) * 100);
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+      <div>
+        <div style={{ fontSize: 9, color: 'var(--cwm-text-faint)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Normal (design)</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--cwm-text)', fontVariantNumeric: 'tabular-nums' }}>{pressure.nominal.toFixed(2)}<span style={{ fontSize: 10, color: 'var(--cwm-text-faint)' }}> :1</span></div>
+        <div style={{ height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', marginTop: 5 }}>
+          <div style={{ width: `${scale(pressure.nominal)}%`, height: '100%', background: 'var(--cwm-text-faint)' }} />
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 9, color: 'var(--cwm-text-faint)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Current (peak)</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: col, fontVariantNumeric: 'tabular-nums' }}>
+          {pressure.current.toFixed(2)}<span style={{ fontSize: 10, color: 'var(--cwm-text-faint)' }}> :1</span>
+          <span style={{ fontSize: 11, marginLeft: 8 }}>{pressure.deltaPct > 0 ? '+' : ''}{pressure.deltaPct}%</span>
+        </div>
+        <div style={{ height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', marginTop: 5 }}>
+          <div style={{ width: `${scale(pressure.current)}%`, height: '100%', background: col, transition: 'width 0.25s ease' }} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -566,7 +677,7 @@ function CycleTable({ cycles, onReplay }: { cycles: StartCycle[]; onReplay: (id:
       <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ borderBottom: '1px solid var(--cwm-border)' }}>
-            {['#', 'Flight Hr', 'Status', 'Duration', 'Peak JPT1', 'Max Ngg', 'Fuel', 'Eff %', 'Reason', 'Improvement', ''].map(h => (
+            {['#', 'Flight Hr', 'Status', 'Duration', 'Peak TGT', 'Max N1', 'Fuel', 'Eff %', 'Reason', 'Improvement', ''].map(h => (
               <th key={h} style={{ textAlign: 'left', padding: '8px 8px', fontSize: 10, fontWeight: 600, color: 'var(--cwm-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</th>
             ))}
           </tr>
@@ -638,12 +749,11 @@ function DbStatusBadge({ status, count }: { status: string; count: number }) {
 }
 
 function FlightLibraryGrid({
-  flights, loadingId, onAnalyse, onSimulate,
+  flights, loadingId, onAnalyse,
 }: {
   flights:    BackendFlight[];
   loadingId:  number | null;
   onAnalyse:  (id: number) => void;
-  onSimulate: (id: number) => void;
 }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
@@ -678,7 +788,7 @@ function FlightLibraryGrid({
               <span style={{ color: 'var(--cwm-text)', fontWeight: 600 }}>{f.total_start_cycles}</span>
               <span style={{ color: 'var(--cwm-text-faint)' }}>Faults</span>
               <span style={{ color: f.faulty_cycle_count > 0 ? 'var(--cwm-warning)' : 'var(--cwm-text)', fontWeight: 600 }}>{f.faulty_cycle_count}</span>
-              <span style={{ color: 'var(--cwm-text-faint)' }}>Avg JPT1</span>
+              <span style={{ color: 'var(--cwm-text-faint)' }}>Avg TGT</span>
               <span style={{ color: f.avg_peak_jpt1_degC > 880 ? 'var(--cwm-danger)' : 'var(--cwm-text)', fontWeight: 600 }}>{f.avg_peak_jpt1_degC.toFixed(0)} °C</span>
             </div>
 
@@ -700,6 +810,127 @@ function FlightLibraryGrid({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── Pre-Flight Readiness (engineer's quick look) ─────────────────────────────
+
+function PreFlightReadiness({ wear, latestFlight, onSeeLifeCycle }: {
+  wear: ComponentWearRecord[]; latestFlight: FlightRecord; onSeeLifeCycle: () => void;
+}) {
+  const sorted = wear.slice().sort((a, b) => b.wearPct - a.wearPct);
+  const failFirst = sorted[0];
+  const engineLifeRemaining = wear.length ? Math.min(...wear.map(w => w.remainingLifeHrs)) : 0;
+  const maxWear = failFirst?.wearPct ?? 0;
+  const readiness = Math.max(0, 100 - maxWear);
+  const recentAborts = latestFlight.abortCount;
+  const status: 'go' | 'caution' | 'nogo' =
+    maxWear > 90 || recentAborts > 2 ? 'nogo' : maxWear > 70 || recentAborts > 0 ? 'caution' : 'go';
+  const meta = {
+    go:      { label: 'GO',      color: 'var(--cwm-success)', bg: 'var(--cwm-success-bg)', border: 'var(--cwm-success-border)', note: 'All systems within limits — cleared to prepare for flight.' },
+    caution: { label: 'CAUTION', color: 'var(--cwm-warning)', bg: 'var(--cwm-warning-bg)', border: 'var(--cwm-warning-border)', note: 'Review flagged components before the next start.' },
+    nogo:    { label: 'NO-GO',   color: 'var(--cwm-danger)',  bg: 'var(--cwm-danger-bg)',  border: 'var(--cwm-danger-border)',  note: 'Life-limit or repeated aborts — maintenance required before flight.' },
+  }[status];
+
+  return (
+    <div className="ds-panel" style={{ padding: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cwm-text)' }}>Pre-Flight Readiness — quick look</div>
+          <div style={{ fontSize: 10, color: 'var(--cwm-text-faint)', marginTop: 2 }}>Glance every parameter and remaining life before preparing for flight</div>
+        </div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, padding: '8px 16px', borderRadius: 10, background: meta.bg, border: `1px solid ${meta.border}` }}>
+          <span style={{ width: 10, height: 10, borderRadius: 5, background: meta.color }} />
+          <span style={{ fontSize: 16, fontWeight: 800, color: meta.color, letterSpacing: '0.06em' }}>{meta.label}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4" style={{ marginTop: 14 }}>
+        <div className="gtsu-metric">
+          <div className="m-label">Overall Readiness</div>
+          <div className="m-value" style={{ color: meta.color }}>{readiness.toFixed(0)}%</div>
+          <div className="m-sub">{meta.note}</div>
+        </div>
+        <div className="gtsu-metric">
+          <div className="m-label">Life Remaining (engine)</div>
+          <div className="m-value">{engineLifeRemaining.toLocaleString()} <span style={{ fontSize: 10, color: 'var(--cwm-text-faint)', fontWeight: 600 }}>hrs</span></div>
+          <div className="m-sub">Set by {failFirst?.name ?? '—'}</div>
+        </div>
+        <div className="gtsu-metric">
+          <div className="m-label">This Flight</div>
+          <div className="m-value" style={{ color: latestFlight.abortCount > 0 ? 'var(--cwm-danger)' : 'var(--cwm-text)' }}>{latestFlight.abortCount} aborts</div>
+          <div className="m-sub">{latestFlight.faultyCount} faulty · {latestFlight.degradedCount} degraded</div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+        {sorted.map(w => {
+          const col = w.wearPct > 80 ? 'var(--cwm-danger)' : w.wearPct > 60 ? '#f97316' : w.wearPct > 40 ? 'var(--cwm-warning)' : 'var(--cwm-success)';
+          return (
+            <div key={w.id} style={{ padding: '8px 10px', background: 'var(--cwm-surface-soft)', borderRadius: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                <span style={{ color: 'var(--cwm-text-muted)' }}>{w.name}</span>
+                <span style={{ color: col, fontWeight: 700 }}>{w.remainingLifeHrs.toLocaleString()} hrs</span>
+              </div>
+              <div style={{ height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(100, w.wearPct)}%`, height: '100%', background: col }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <button onClick={onSeeLifeCycle} className="gtsu-btn accent sm" style={{ marginTop: 14 }}>OPEN FULL LIFE-CYCLE BREAKDOWN →</button>
+    </div>
+  );
+}
+
+// ── Flight Records / event log ───────────────────────────────────────────────
+
+interface EngineEvent { hour: number; kind: string; label: string; detail: string; tone: 'bad' | 'warn' | 'info' | 'good'; }
+
+function computeRecords(flights: FlightRecord[]): { events: EngineEvent[]; totalHrs: number } {
+  const events: EngineEvent[] = [];
+  let base = 0;
+  flights.forEach((f, fi) => {
+    events.push({ hour: base, kind: 'flight', label: `Flight ${fi + 1} ingested`, detail: `${f.durationHrs} hrs · ${f.cycles.length} start cycles · ${f.successCount} ok`, tone: 'info' });
+    for (const c of f.cycles) {
+      const h = base + c.flightHour;
+      if (c.status === 'aborted') events.push({ hour: h, kind: 'abort', label: `Cycle #${c.cycleNumber} ABORTED`, detail: c.faultReason ? FAULT_LABELS[c.faultReason] : 'start aborted', tone: 'bad' });
+      else if (c.status === 'faulty') events.push({ hour: h, kind: 'fault', label: `Cycle #${c.cycleNumber} fault`, detail: c.faultReason ? FAULT_LABELS[c.faultReason] : 'fault', tone: 'warn' });
+      else if (c.peakJpt1 > 900) events.push({ hour: h, kind: 'tgt', label: `Cycle #${c.cycleNumber} TGT exceedance`, detail: `peak ${c.peakJpt1.toFixed(0)}°C`, tone: 'warn' });
+    }
+    base += f.durationHrs;
+  });
+  return { events: events.sort((a, b) => a.hour - b.hour), totalHrs: base };
+}
+
+function FlightRecordsPanel({ flights }: { flights: FlightRecord[] }) {
+  const { events, totalHrs } = useMemo(() => computeRecords(flights), [flights]);
+  const shown = events.slice(-60).reverse();
+  const toneColor = (t: string) => t === 'bad' ? 'var(--cwm-danger)' : t === 'warn' ? 'var(--cwm-warning)' : t === 'good' ? 'var(--cwm-success)' : 'var(--cwm-accent)';
+  const aborts = events.filter(e => e.kind === 'abort').length;
+  const faults = events.filter(e => e.kind === 'fault').length;
+  return (
+    <div className="ds-panel" style={{ padding: 16 }}>
+      <SectionHead
+        title="Flight Records — event log"
+        subtitle={`${events.length} recorded events across ${totalHrs.toFixed(0)} cumulative flight hours · ${aborts} aborts · ${faults} faults · every exceedance is kept`}
+      />
+      {events.length === 0 ? (
+        <p style={{ fontSize: 12, color: 'var(--cwm-text-faint)' }}>No notable events — all cycles nominal so far.</p>
+      ) : (
+        <div style={{ maxHeight: 300, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {shown.map((e, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--cwm-surface-soft)', borderRadius: 7, borderLeft: `3px solid ${toneColor(e.tone)}`, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--cwm-text-faint)', fontVariantNumeric: 'tabular-nums', minWidth: 64 }}>{e.hour.toFixed(1)} hr</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--cwm-text)' }}>{e.label}</span>
+              <span style={{ fontSize: 11, color: 'var(--cwm-text-muted)' }}>· {e.detail}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

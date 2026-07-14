@@ -7,7 +7,7 @@
  *   ├─ Cycle strip: one card per starter cycle (horizontal scroll) ────┤
  *   ├─ Cycle timeline: progress bar scoped to the selected cycle ──────┤
  *   ├─ Transport: ⏮ ⏪ ▶/⏸ ⏩ ⏭ · elapsed / duration · speed ───────┤
- *   └─ Status row: phase, JPT1, Ngg, P2/P1, OAT, faults ─────────────┘
+ *   └─ Status row: phase, TGT, N1, P2/P1, OAT, faults ───────────────┘
  *
  * Props:
  *   onFrameChange – called on every tick with the current CycleTraceSample
@@ -460,8 +460,8 @@ export default function SimulationConsole({ onFrameChange }: Props) {
             >
               {currentRow.start_phase.toUpperCase()}
             </Chip>
-            <Chip>JPT1 {currentRow.jet_pipe_temp_degC.toFixed(0)} °C</Chip>
-            <Chip>Ngg {currentRow.gas_gen_speed_pct.toFixed(1)} %</Chip>
+            <Chip>TGT {currentRow.jet_pipe_temp_degC.toFixed(0)} °C</Chip>
+            <Chip>N1 {currentRow.gas_gen_speed_pct.toFixed(1)} %</Chip>
             <Chip>P2/P1 {currentRow.compressor_pressure_ratio.toFixed(2)}</Chip>
             <Chip>OAT {currentRow.ambient_temp_degC.toFixed(0)} °C</Chip>
             {currentRow.vibration_mm_per_sec > 5 && (

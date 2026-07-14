@@ -177,6 +177,9 @@ export default function LifeCyclePage() {
         </div>
       </div>
 
+      {/* ── Total life & service periods ──────────────────────── */}
+      <TotalLifePanel components={sortedWear} lifeLimiting={failFirst} />
+
       {/* ── Component wear table ──────────────────────────────── */}
       <div className="ds-panel" style={{ padding: 18 }}>
         <SectionHead title="Component Wear Inventory" subtitle="Ranked by failure risk · fail-first at top" />
@@ -340,6 +343,90 @@ function WearMultiLine({ series, wear }: { series: Record<string, { x: number; y
         ))}
       </g>
     </svg>
+  );
+}
+
+// ── Total engine life split into overall service periods ────────────────────
+
+const SERVICE_PERIODS = [
+  { label: 'Run-in',      color: '#16a34a' },
+  { label: 'Mid-life',    color: '#84cc16' },
+  { label: 'Hot-section', color: '#f59e0b' },
+  { label: 'Overhaul',    color: '#dc2626' },
+];
+
+/** Segmented "out of total" life bar — total design life divided into the four
+ *  overall service periods, with a playhead at the consumed fraction. */
+function LifeSegmentBar({ consumedFrac, height = 30 }: { consumedFrac: number; height?: number }) {
+  const n = SERVICE_PERIODS.length;
+  const fillPct = Math.min(100, Math.max(0, consumedFrac * 100));
+  return (
+    <div style={{ position: 'relative', height, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--cwm-border)', display: 'flex' }}>
+      {SERVICE_PERIODS.map((p, i) => (
+        <div key={i} style={{ flex: 1, background: p.color, opacity: 0.16, borderRight: i < n - 1 ? '1px solid rgba(255,255,255,0.18)' : 'none' }} />
+      ))}
+      {/* consumed overlay */}
+      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${fillPct}%`,
+        background: 'linear-gradient(90deg, rgba(22,163,74,0.55), rgba(245,158,11,0.55) 70%, rgba(220,38,38,0.55))',
+        transition: 'width 0.3s ease' }} />
+      {/* period labels */}
+      {SERVICE_PERIODS.map((p, i) => (
+        <span key={`l${i}`} style={{ position: 'absolute', left: `calc(${(i / n) * 100}% + 6px)`, top: '50%', transform: 'translateY(-50%)',
+          fontSize: 8.5, fontWeight: 700, letterSpacing: '0.03em', color: 'var(--cwm-text)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>{p.label}</span>
+      ))}
+      {/* playhead */}
+      <div style={{ position: 'absolute', left: `${fillPct}%`, top: 0, bottom: 0, width: 2, background: 'var(--cwm-text)', boxShadow: '0 0 6px rgba(0,0,0,0.6)' }} />
+    </div>
+  );
+}
+
+function TotalLifePanel({ components, lifeLimiting }: { components: ComponentWearRecord[]; lifeLimiting?: ComponentWearRecord }) {
+  if (!lifeLimiting) return null;
+  const totalLifeHrs = lifeLimiting.designLifeHrs;
+  const consumedFrac = lifeLimiting.wearPct / 100;
+  const consumedHrs  = Math.round(consumedFrac * totalLifeHrs);
+  const remainingHrs = lifeLimiting.remainingLifeHrs;
+  const period = Math.min(SERVICE_PERIODS.length - 1, Math.floor(consumedFrac * SERVICE_PERIODS.length));
+
+  return (
+    <div className="ds-panel" style={{ padding: 18 }}>
+      <SectionHead title="Total Engine Life — service periods" subtitle="Total design life split into overall periods · playhead marks life consumed so far" />
+
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 26, fontWeight: 700, color: 'var(--cwm-text)', fontVariantNumeric: 'tabular-nums' }}>{consumedHrs.toLocaleString()}</span>
+        <span style={{ fontSize: 13, color: 'var(--cwm-text-muted)' }}>hrs consumed <b style={{ color: 'var(--cwm-text-faint)' }}>out of</b> {totalLifeHrs.toLocaleString()} hrs total design life</span>
+        <span className="status-chip status-chip-accent" style={{ marginLeft: 'auto' }}>Current period · {SERVICE_PERIODS[period].label}</span>
+      </div>
+
+      <LifeSegmentBar consumedFrac={consumedFrac} />
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--cwm-text-faint)', marginTop: 6 }}>
+        <span>0 hrs · new</span>
+        <span style={{ color: remainingHrs < totalLifeHrs * 0.2 ? 'var(--cwm-danger)' : 'var(--cwm-text-muted)', fontWeight: 700 }}>{remainingHrs.toLocaleString()} hrs remaining</span>
+        <span>{totalLifeHrs.toLocaleString()} hrs · life limit</span>
+      </div>
+
+      {/* Per-component "out of total" segmented life */}
+      <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Per-component life consumed (out of design life)</div>
+        {components.map(c => {
+          const frac = c.wearPct / 100;
+          const cons = Math.round(frac * c.designLifeHrs);
+          const col = c.wearPct > 80 ? 'var(--cwm-danger)' : c.wearPct > 60 ? '#f97316' : c.wearPct > 40 ? 'var(--cwm-warning)' : 'var(--cwm-success)';
+          return (
+            <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 140px', gap: 12, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--cwm-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+              <div style={{ height: 8, background: 'rgba(255,255,255,0.06)', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(100, c.wearPct)}%`, height: '100%', background: col, transition: 'width 0.3s ease' }} />
+              </div>
+              <span style={{ fontSize: 10, color: 'var(--cwm-text-faint)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                {cons.toLocaleString()} / {c.designLifeHrs.toLocaleString()} hrs
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

@@ -12,7 +12,8 @@ import { useMemo, useState } from 'react';
 import { useGTSUStore } from '../store/useGTSUStore';
 import { SANDBOX_BASELINE, simulateSandbox } from '../lib/flightSimulator';
 import { buildSandboxHotspots } from '../lib/engineHotspots';
-import { EngineModel3D, HotspotLegend } from '../components/EngineModel3D';
+import { EngineModel3D, HotspotLegend, SectionLegend, LabelToggle } from '../components/EngineModel3D';
+import { deriveN2, deriveSectionRatios, MAX_NPT_RPM, ENGINE_FORMULAS } from '../lib/engineDerived';
 import type { SandboxInputs, SandboxOutputs, SandboxRun, CycleTraceSample, StartPhase } from '../types/engine';
 
 export default function SandboxPage() {
@@ -21,6 +22,9 @@ export default function SandboxPage() {
   const clearSandbox = useGTSUStore(s => s.clearSandbox);
 
   const [inputs, setInputs] = useState<SandboxInputs>({ ...SANDBOX_BASELINE });
+  const [showLabels, setShowLabels]     = useState(true);
+  const [showSections, setShowSections] = useState(true);
+  const [showFormulas, setShowFormulas] = useState(false);
 
   // Preview the outputs of the current input WITHOUT recording a run.
   const preview = useMemo(() => simulateSandbox(inputs), [inputs]);
@@ -49,6 +53,9 @@ export default function SandboxPage() {
     milBusWord: preview.warnings.length === 0 ? 0x0000 : preview.warnings.length > 2 ? 0x0410 : 0x0010,
     phase: 'self-sustaining' as StartPhase,
   }), [inputs, preview]);
+
+  const n2     = useMemo(() => deriveN2(previewFrame), [previewFrame]);
+  const ratios = useMemo(() => deriveSectionRatios(previewFrame), [previewFrame]);
 
   const onRun = (label?: 'baseline' | 'tuned') => {
     if (label === 'baseline') {
@@ -126,7 +133,7 @@ export default function SandboxPage() {
           <div className="grid grid-cols-2 gap-3">
             <OutputCard label="Shaft Power"     value={preview.powerKW.toFixed(1)}      unit="kW"   delta={baselineOutputs ? preview.powerKW    - baselineOutputs.powerKW    : null} positiveIsGood />
             <OutputCard label="SFC"             value={preview.sfcKgPerKWh.toFixed(3)}  unit="kg/kWh" delta={baselineOutputs ? preview.sfcKgPerKWh - baselineOutputs.sfcKgPerKWh : null} positiveIsGood={false} />
-            <OutputCard label="JPT1 Peak"       value={preview.jpt1PeakC.toFixed(0)}    unit="°C"   delta={baselineOutputs ? preview.jpt1PeakC   - baselineOutputs.jpt1PeakC   : null} positiveIsGood={false} threshold={900} />
+            <OutputCard label="TGT Peak"        value={preview.jpt1PeakC.toFixed(0)}    unit="°C"   delta={baselineOutputs ? preview.jpt1PeakC   - baselineOutputs.jpt1PeakC   : null} positiveIsGood={false} threshold={900} />
             <OutputCard label="Surge Margin"    value={preview.surgeMargin.toFixed(1)}  unit="%"    delta={baselineOutputs ? preview.surgeMargin - baselineOutputs.surgeMargin : null} positiveIsGood threshold={6} thresholdIsMin />
             <OutputCard label="Thermal Stress"  value={preview.thermalStressIdx.toFixed(0)} unit=""   delta={baselineOutputs ? preview.thermalStressIdx - baselineOutputs.thermalStressIdx : null} positiveIsGood={false} />
             <OutputCard label="Feasibility"     value={preview.feasible ? 'OK' : 'NO-GO'} unit=""    tone={preview.feasible ? 'good' : 'bad'} />
@@ -143,12 +150,28 @@ export default function SandboxPage() {
 
           {/* ── Telemetry parameter quick-view ───────────────── */}
           <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-            <SandboxMetric label="JPT1 Peak" value={`${preview.jpt1PeakC.toFixed(0)}°C`} limit="≤900°C gnd / ≤1020°C flt" bad={preview.jpt1PeakC > 900} />
+            <SandboxMetric label="TGT Peak" value={`${preview.jpt1PeakC.toFixed(0)}°C`} limit="≤900°C gnd / ≤1020°C flt" bad={preview.jpt1PeakC > 900} />
             <SandboxMetric label="P2/P1 (surge)" value={`${preview.surgeMargin.toFixed(1)}% SM`} limit="Surge margin ≥6%" bad={preview.surgeMargin < 6} />
-            <SandboxMetric label="Ngg RPM" value={`${Math.round(inputs.rpmTargetPct / 100 * 22000).toLocaleString()} RPM`} limit="Light-up >12,625 · O/S <21,000" bad={inputs.rpmTargetPct > 105} />
-            <SandboxMetric label="OAT (ADU)" value={`${(inputs.oat ?? 15).toFixed(0)}°C`} limit="ISA std 15°C · density corr. active" bad={(inputs.oat ?? 15) > 40 || (inputs.oat ?? 15) < -30} />
+            <SandboxMetric label="N1 · Gas Gen" value={`${Math.round(inputs.rpmTargetPct / 100 * 22000).toLocaleString()} RPM`} limit="Light-up >12,625 · O/S <21,000" bad={inputs.rpmTargetPct > 105} />
+            <SandboxMetric label="N2 · Power Turbine" value={`${n2.rpm.toLocaleString()} RPM`} limit={`${n2.pct.toFixed(0)}% · ref ${MAX_NPT_RPM.toLocaleString()} RPM`} bad={n2.pct > 98} />
             <SandboxMetric label="Stepper / Fuel" value={`${Math.round((inputs.fuelFlowKgH / 10) * 255)} steps`} limit={`≈ ${inputs.fuelFlowKgH.toFixed(1)} kg/h · max 255`} bad={inputs.fuelFlowKgH > 9.5} />
             <SandboxMetric label="SECU BIT" value={preview.warnings.length === 0 ? 'PASS' : 'WARN'} limit={`0x${(preview.warnings.length === 0 ? 0 : 0x0010).toString(16).toUpperCase().padStart(4,'0')} · MIL-1553B`} bad={!preview.feasible} />
+          </div>
+
+          {/* ── Predicted section temperature ratios ─────────── */}
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>
+              Predicted Temperature Ratios · inlet/outlet per section
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {ratios.map(r => (
+                <div key={r.key} className="gtsu-metric" style={{ padding: '8px 10px' }}>
+                  <div className="m-label" style={{ fontSize: 8.5 }}>{r.label}</div>
+                  <div className="m-value" style={{ fontSize: 15, color: 'var(--cwm-accent)' }}>{r.ratio.toFixed(3)}</div>
+                  <div className="m-sub">{r.inC.toFixed(0)}°C → {r.outC.toFixed(0)}°C</div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -157,16 +180,50 @@ export default function SandboxPage() {
       <div className="ds-panel" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px 6px 16px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cwm-text)' }}>Predicted Component Stress</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cwm-text)' }}>GTSU-110 — Predicted Component Stress</div>
             <div style={{ fontSize: 10, color: 'var(--cwm-text-faint)', marginTop: 2, letterSpacing: '0.02em' }}>
-              Color reflects what each component would experience under the current parameter set · delta vs baseline run
+              Color reflects what each section would experience under the current parameter set · delta vs baseline run
             </div>
           </div>
-          <HotspotLegend items={hotspots} />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <HotspotLegend items={hotspots} />
+            <SectionLegend />
+            <div style={{ display: 'flex', gap: 14 }}>
+              <LabelToggle label="Metric labels" on={showLabels} onChange={setShowLabels} />
+              <LabelToggle label="Section tags" on={showSections} onChange={setShowSections} />
+            </div>
+          </div>
         </div>
-        <div style={{ height: 340, position: 'relative' }}>
-          <EngineModel3D frame={previewFrame} hotspots={hotspots} />
+        <div style={{ height: 360, position: 'relative' }}>
+          <EngineModel3D frame={previewFrame} hotspots={hotspots} showLabels={showLabels} showSections={showSections} />
         </div>
+      </div>
+
+      {/* ── Calculations / formulas ("in paper" physics) ────── */}
+      <div className="ds-panel" style={{ padding: 16 }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+          onClick={() => setShowFormulas(o => !o)}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cwm-text-faint)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            Calculations &amp; Physics — every parameter
+          </div>
+          <span style={{ color: 'var(--cwm-text-muted)', fontSize: 12 }}>{showFormulas ? '▲' : '▼'}</span>
+        </div>
+        {showFormulas && (
+          <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 10 }}>
+            {ENGINE_FORMULAS.map(f => (
+              <div key={f.symbol} style={{ padding: '10px 12px', background: 'var(--cwm-surface-soft)', border: '1px solid var(--cwm-border)', borderRadius: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--cwm-accent)' }}>{f.symbol}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--cwm-text)' }}>{f.name}</span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--cwm-text-muted)', fontFamily: 'monospace', marginTop: 5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{f.formula}</div>
+                <div style={{ fontSize: 9.5, color: 'var(--cwm-text-faint)', marginTop: 5, fontStyle: 'italic', lineHeight: 1.5 }}>{f.note}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Empty state for runs ─────────────────────────────── */}
@@ -300,7 +357,7 @@ function RunComparisonTable({ runs }: { runs: SandboxRun[] }) {
       <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ borderBottom: '1px solid var(--cwm-border)' }}>
-            {['Run', 'When', 'Fuel kg/h', 'IGV°', 'RPM %', 'Power kW', 'SFC kg/kWh', 'JPT1 °C', 'Surge %', 'Status'].map(h => (
+            {['Run', 'When', 'Fuel kg/h', 'IGV°', 'RPM %', 'Power kW', 'SFC kg/kWh', 'TGT °C', 'Surge %', 'Status'].map(h => (
               <th key={h} style={{ textAlign: 'left', padding: '8px 8px', fontSize: 10, fontWeight: 600, color: 'var(--cwm-text-faint)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{h}</th>
             ))}
           </tr>
