@@ -8,7 +8,7 @@ module.exports = {
   apps: [
     {
       // Frontend — static SPA (dist/) served by PM2's built-in server on 3213.
-      name: 'gtsu_frontend_3213',
+      name: 'gtsu110_3213',
       script: 'serve',
       env: {
         PM2_SERVE_PATH: './dist',
@@ -19,7 +19,7 @@ module.exports = {
     },
     {
       // Backend — Express + SQLite REST API (/api/*) on 3013.
-      name: 'gtsu_backend_3013',
+      name: 'gtsu110_be_3013',
       script: './server.js',
       env: {
         PORT: 3013,

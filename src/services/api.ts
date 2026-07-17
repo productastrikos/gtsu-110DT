@@ -1,12 +1,9 @@
 import axios from 'axios';
 
-const browserOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-const isLocalOrigin = /localhost|127\.0\.0\.1/.test(browserOrigin);
-const localApiBase = typeof window !== 'undefined'
-  ? `${window.location.protocol}//${window.location.hostname}:5000/api`
-  : 'http://localhost:5000/api';
-const productionApiBase = browserOrigin ? `${browserOrigin}/api` : 'http://localhost:5000/api';
-const API_BASE = isLocalOrigin ? localApiBase : productionApiBase;
+// Backend origin comes from VITE_API_URL. Empty (dev) → same-origin `/api`,
+// which the Vite proxy forwards to the local backend.
+const API_URL  = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
+const API_BASE = `${API_URL}/api`;
 
 const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
 
@@ -52,16 +49,14 @@ export const acknowledgeAdvisory = (id: string) => api.put(`/advisories/${id}/ac
 export const getWeather = () => api.get('/weather');
 export const getZones = () => api.get('/zones');
 
-// ─── Flight Database (FastAPI backend) ───────────────────────────────────────
-// Relative path works in both dev (Vite proxies /api → :8000) and production
-// (FastAPI serves both the API and the built frontend on the same port).
+// ─── Flight Database (Express backend, server.js) ────────────────────────────
 
 import type {
   BackendFlight, BackendCycle, TraceRow,
   FlightRecord,
 } from '../types/engine';
 
-const flightApi = axios.create({ baseURL: '/api', timeout: 30000 });
+const flightApi = axios.create({ baseURL: API_BASE, timeout: 30000 });
 
 /** List all flights (metadata only). */
 export const getBackendFlights = () =>

@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react';
 import { useGTSUStore } from '../store/useGTSUStore';
 import { SANDBOX_BASELINE, simulateSandbox } from '../lib/flightSimulator';
 import { buildSandboxHotspots } from '../lib/engineHotspots';
-import { EngineModel3D, HotspotLegend, SectionLegend, LabelToggle } from '../components/EngineModel3D';
+import { EngineModel3D } from '../components/EngineModel3D';
 import { deriveN2, deriveSectionRatios, MAX_NPT_RPM, ENGINE_FORMULAS } from '../lib/engineDerived';
 import type { SandboxInputs, SandboxOutputs, SandboxRun, CycleTraceSample, StartPhase } from '../types/engine';
 
@@ -22,8 +22,6 @@ export default function SandboxPage() {
   const clearSandbox = useGTSUStore(s => s.clearSandbox);
 
   const [inputs, setInputs] = useState<SandboxInputs>({ ...SANDBOX_BASELINE });
-  const [showLabels, setShowLabels]     = useState(true);
-  const [showSections, setShowSections] = useState(true);
   const [showFormulas, setShowFormulas] = useState(false);
 
   // Preview the outputs of the current input WITHOUT recording a run.
@@ -185,17 +183,9 @@ export default function SandboxPage() {
               Color reflects what each section would experience under the current parameter set · delta vs baseline run
             </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-            <HotspotLegend items={hotspots} />
-            <SectionLegend />
-            <div style={{ display: 'flex', gap: 14 }}>
-              <LabelToggle label="Metric labels" on={showLabels} onChange={setShowLabels} />
-              <LabelToggle label="Section tags" on={showSections} onChange={setShowSections} />
-            </div>
-          </div>
         </div>
         <div style={{ height: 360, position: 'relative' }}>
-          <EngineModel3D frame={previewFrame} hotspots={hotspots} showLabels={showLabels} showSections={showSections} />
+          <EngineModel3D frame={previewFrame} hotspots={hotspots} />
         </div>
       </div>
 

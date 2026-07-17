@@ -12,7 +12,7 @@
  *   > 90 %  → bad (critical)
  */
 
-import type { EngineHotspot, HotspotSeverity } from '../components/EngineModel3D';
+import type { EngineHotspot, HotspotSeverity, SectionKey } from '../components/EngineModel3D';
 import type {
   ComponentWearRecord,
   FlightRecord,
@@ -22,17 +22,24 @@ import type {
   SandboxOutputs,
 } from '../types/engine';
 
-// ── Component positions on the normalized engine ────────────────────────
-// Engine fits in roughly a ±1.3 cube after normalization. These positions
-// scatter the hotspots around it so labels don't overlap.
-
-export const COMPONENT_POSITION: Record<string, [number, number, number]> = {
-  'hp-compressor':   [-1.3,  0.45, 0.0],
-  'fuel-nozzles':    [-0.25, 1.05, 0.4],
-  'combustor-liner': [ 0.05, 0.75, 0.0],
-  'hpt-blades':      [ 1.05, 0.55, 0.0],
-  'turbine-bearing': [ 1.40,-0.15, 0.0],
-  'secu-main':       [ 0.10,-0.95, 0.5],
+// ── Which engine section each component belongs to ──────────────────────
+// The twin is hovered by pointing at the GEOMETRY itself, so every component
+// must declare the section it lives in — that is what the raycast resolves to.
+// (There are no marker positions any more: components are no longer placed by
+// hand in space, they are found by hovering the hardware.)
+//
+//   fuel-nozzles  → combustor    : the nozzles spray into the combustor can
+//   hpt-blades    → gas-gen turbine : "HP turbine" = the gas-generator turbine
+//   turbine-bearing → power turbine : the rear bearing carries the free turbine
+//   secu-main     → inlet        : on a PT6C the accessory case and its control
+//                                  unit sit at the REAR, alongside the air inlet
+export const HOTSPOT_SECTION: Record<string, SectionKey> = {
+  'hp-compressor':   'compressor',
+  'fuel-nozzles':    'combustor',
+  'combustor-liner': 'combustor',
+  'hpt-blades':      'gas-gen-turbine',
+  'turbine-bearing': 'power-turbine',
+  'secu-main':       'inlet',
 };
 
 const SHORT_LABEL: Record<string, string> = {
@@ -79,7 +86,6 @@ export function buildPostFlightHotspots(
   }
 
   return wear.map<EngineHotspot>(w => {
-    const pos = COMPONENT_POSITION[w.id] ?? [0, 0, 0];
     const severity = severityFromPct(w.wearPct);
 
     // Delta vs previous flight (if available)
@@ -112,7 +118,7 @@ export function buildPostFlightHotspots(
 
     return {
       id:       w.id,
-      position: pos,
+      section: HOTSPOT_SECTION[w.id],
       label:    SHORT_LABEL[w.id] ?? w.name,
       value:    `${w.wearPct.toFixed(0)}%`,
       metric:   `${w.primaryStressor} · ${w.remainingLifeHrs.toLocaleString()} hrs left · ${stressNote}`,
@@ -163,7 +169,7 @@ export function buildSimulatorHotspots(
   return [
     {
       id: 'hp-compressor',
-      position: COMPONENT_POSITION['hp-compressor'],
+      section: HOTSPOT_SECTION['hp-compressor'],
       label: SHORT_LABEL['hp-compressor'],
       value: `${frame.p2p1.toFixed(2)}:1`,
       metric: `P2/P1 ratio · nominal 3.86 · compressor fouling / mass flow · wear ${wearOf('hp-compressor').toFixed(0)} %`,
@@ -171,7 +177,7 @@ export function buildSimulatorHotspots(
     },
     {
       id: 'fuel-nozzles',
-      position: COMPONENT_POSITION['fuel-nozzles'],
+      section: HOTSPOT_SECTION['fuel-nozzles'],
       label: SHORT_LABEL['fuel-nozzles'],
       value: `${frame.stepperPos} steps / ${frame.fuelFlow.toFixed(1)} kg/h`,
       metric: `Stepper 0-255 → fuel 0-9.5 kg/h · OAT ${frame.oat.toFixed(0)}°C · wear ${wearOf('fuel-nozzles').toFixed(0)} %`,
@@ -179,7 +185,7 @@ export function buildSimulatorHotspots(
     },
     {
       id: 'combustor-liner',
-      position: COMPONENT_POSITION['combustor-liner'],
+      section: HOTSPOT_SECTION['combustor-liner'],
       label: SHORT_LABEL['combustor-liner'],
       value: `${frame.jpt1.toFixed(0)}°C`,
       metric: `Combustor outlet · hot-spot 900°C · N1 ${frame.ngg > 12625 ? '✓ lit' : '↑ cranking'} · wear ${wearOf('combustor-liner').toFixed(0)} %`,
@@ -187,7 +193,7 @@ export function buildSimulatorHotspots(
     },
     {
       id: 'hpt-blades',
-      position: COMPONENT_POSITION['hpt-blades'],
+      section: HOTSPOT_SECTION['hpt-blades'],
       label: SHORT_LABEL['hpt-blades'],
       value: `${frame.jpt1.toFixed(0)}°C`,
       metric: `TGT · GROUND ≤900°C / FLIGHT ≤1020°C · creep life · N1 ${frame.ngg.toLocaleString()} RPM${lightUpAchieved ? ' ✓' : ''}`,
@@ -195,7 +201,7 @@ export function buildSimulatorHotspots(
     },
     {
       id: 'turbine-bearing',
-      position: COMPONENT_POSITION['turbine-bearing'],
+      section: HOTSPOT_SECTION['turbine-bearing'],
       label: SHORT_LABEL['turbine-bearing'],
       value: `${frame.vibration.toFixed(1)} mm/s`,
       metric: `Vibration · rotor stability · limit 11 mm/s · wear ${wearOf('turbine-bearing').toFixed(0)} %`,
@@ -203,7 +209,7 @@ export function buildSimulatorHotspots(
     },
     {
       id: 'secu-main',
-      position: COMPONENT_POSITION['secu-main'],
+      section: HOTSPOT_SECTION['secu-main'],
       label: SHORT_LABEL['secu-main'],
       value: frame.secuHealthy ? (frame.bitPass ? 'BIT PASS' : 'BIT FAIL') : 'SECU FAULT',
       metric: `MIL-1553B: 0x${frame.milBusWord.toString(16).toUpperCase().padStart(4, '0')} · IPS nominal · phase: ${frame.phase}`,
@@ -263,7 +269,7 @@ export function buildSandboxHotspots(
   return [
     {
       id: 'hp-compressor',
-      position: COMPONENT_POSITION['hp-compressor'],
+      section: HOTSPOT_SECTION['hp-compressor'],
       label: SHORT_LABEL['hp-compressor'],
       value: `${outputs.surgeMargin.toFixed(1)}% SM`,
       metric: `Surge margin · IGV ${inputs.bladeAngleDeg.toFixed(1)}° · RPM ${inputs.rpmTargetPct.toFixed(0)} %`,
@@ -272,7 +278,7 @@ export function buildSandboxHotspots(
     },
     {
       id: 'fuel-nozzles',
-      position: COMPONENT_POSITION['fuel-nozzles'],
+      section: HOTSPOT_SECTION['fuel-nozzles'],
       label: SHORT_LABEL['fuel-nozzles'],
       value: `${Math.round((inputs.fuelFlowKgH / 10) * 255)} steps / ${inputs.fuelFlowKgH.toFixed(1)} kg/h`,
       metric: `Stepper 0-255 → fuel 0-9.5 kg/h · SFC ${outputs.sfcKgPerKWh.toFixed(3)} kg/kWh`,
@@ -280,7 +286,7 @@ export function buildSandboxHotspots(
     },
     {
       id: 'combustor-liner',
-      position: COMPONENT_POSITION['combustor-liner'],
+      section: HOTSPOT_SECTION['combustor-liner'],
       label: SHORT_LABEL['combustor-liner'],
       value: `${outputs.thermalStressIdx.toFixed(0)} stress`,
       metric: `Thermal-stress index (0-100) — drives combustor liner life`,
@@ -289,7 +295,7 @@ export function buildSandboxHotspots(
     },
     {
       id: 'hpt-blades',
-      position: COMPONENT_POSITION['hpt-blades'],
+      section: HOTSPOT_SECTION['hpt-blades'],
       label: SHORT_LABEL['hpt-blades'],
       value: `${outputs.jpt1PeakC.toFixed(0)}°C`,
       metric: `Predicted TGT peak · GROUND ≤900°C / FLIGHT ≤1020°C · creep life consumption`,
@@ -298,7 +304,7 @@ export function buildSandboxHotspots(
     },
     {
       id: 'turbine-bearing',
-      position: COMPONENT_POSITION['turbine-bearing'],
+      section: HOTSPOT_SECTION['turbine-bearing'],
       label: SHORT_LABEL['turbine-bearing'],
       value: `${inputs.rpmTargetPct.toFixed(0)}% RPM`,
       metric: `Over-speed limit 105 % · power ${outputs.powerKW.toFixed(1)} kW`,
@@ -306,7 +312,7 @@ export function buildSandboxHotspots(
     },
     {
       id: 'secu-main',
-      position: COMPONENT_POSITION['secu-main'],
+      section: HOTSPOT_SECTION['secu-main'],
       label: SHORT_LABEL['secu-main'],
       value: outputs.feasible ? 'BIT PASS' : `${outputs.warnings.length} WARN`,
       metric: (outputs.warnings[0] ?? 'All controls within envelope') + ` · OAT ${inputs.oat ?? 15}°C`,

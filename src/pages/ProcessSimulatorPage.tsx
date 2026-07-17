@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGTSUStore, getSelectedCycle, getCurrentFrame } from '../store/useGTSUStore';
-import { EngineModel3D, HotspotLegend, SectionLegend, LabelToggle } from '../components/EngineModel3D';
+import { EngineModel3D } from '../components/EngineModel3D';
 import { FAULT_LABELS } from '../lib/flightSimulator';
 import { buildSimulatorHotspots } from '../lib/engineHotspots';
 import type { CycleTraceSample, StartPhase } from '../types/engine';
@@ -64,9 +64,6 @@ export default function ProcessSimulatorPage() {
   const [dbMode, setDbMode]           = useState(!!loadedBackendFlight);
   const [consoleFrame, setConsoleFrame] = useState<CycleTraceSample | null>(null);
 
-  // 3D twin display controls
-  const [showLabels, setShowLabels]     = useState(true);
-  const [showSections, setShowSections] = useState(true);
   const [showFormulas, setShowFormulas] = useState(false);
 
   // Auto-enter db mode when a backend flight is loaded
@@ -251,18 +248,7 @@ export default function ProcessSimulatorPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, minHeight: 0 }}>
         {/* 3D model */}
         <div className="ds-panel" style={{ position: 'relative', overflow: 'hidden', height: 500 }}>
-          <EngineModel3D frame={frame} hotspots={hotspots} showLabels={showLabels} showSections={showSections} />
-
-          {/* Twin controls: section legend + label toggles */}
-          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.6)', borderRadius: 8, padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center', maxWidth: '92%' }}>
-            <HotspotLegend items={hotspots} />
-            <SectionLegend />
-          </div>
-
-          <div style={{ position: 'absolute', bottom: 74, left: 12, display: 'flex', gap: 14, background: 'rgba(0,0,0,0.6)', borderRadius: 8, padding: '6px 10px' }}>
-            <LabelToggle label="Metric labels" on={showLabels} onChange={setShowLabels} />
-            <LabelToggle label="Section tags" on={showSections} onChange={setShowSections} />
-          </div>
+          <EngineModel3D frame={frame} hotspots={hotspots} />
 
           {/* HUD overlay */}
           <div style={{ position: 'absolute', top: 12, left: 12, padding: '8px 12px', background: 'rgba(0,0,0,0.6)', borderRadius: 6, fontFamily: 'monospace' }}>

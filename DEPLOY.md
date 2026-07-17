@@ -1,129 +1,115 @@
-# GTSU-110 — local server deployment
+# GTSU-110 — Deployment (astrikos.xyz)
 
-Two PM2 processes behind one local nginx block. Plain HTTP — no domain, no TLS,
-no Cloudflare. (The public office-server deploy at `gtsu-110.astrikos.org` —
-SSL + real `server_name` — comes later; this doc is the LAN/local box only.)
+Follows `deployment_context.md`. One frontend port, one backend port; the backend
+port serves REST **and** websocket upgrades through a single nginx block.
 
-| Piece | Process | Port | nginx |
-| --- | --- | --- | --- |
-| Frontend (static SPA `dist/`) | `pm2 serve ./dist` | **3213** | `location /` |
-| Backend REST API (`/api/*`) | `server.js` | **3013** | `location /api/` |
+> **Port note.** The convention (§1) reserves `33XX` for frontends and `43XX` for
+> backends. This POC deploys on **3213 / 3013** by explicit instruction, which sits
+> outside both bands and inverts the usual ordering (the lower number is the
+> backend). Read the tier from this table, not from the port prefix.
 
-The frontend talks to the backend over plain REST at a **relative `/api` path**
-(see `src/services/api.ts`), so both sit behind **one nginx server** and nginx
-splits the traffic: `/api/*` → backend `:3013`, everything else → frontend
-`:3213`. The flight data (the real backend feature) always uses that relative
-`/api`, so it resolves to whatever host you open the page on and flows through
-nginx — nothing host-specific is baked into the build.
+## Processes
 
-Prereq on the box: **Node 20** (`.nvmrc`), **PM2** (`npm i -g pm2`), and
-**nginx**. No Python needed.
+| Tier | Port | Subdomain | pm2 name | Process |
+| --- | --- | --- | --- | --- |
+| Frontend | 3213 | `gtsu110.astrikos.xyz` | `gtsu110_3213` | pm2 static server → `dist/` |
+| Backend | 3013 | `gtsu110-api.astrikos.xyz` | `gtsu110_be_3013` | `server.js` (Express + libSQL) |
 
----
+Single backend process — `server.js` — reading `process.env.PORT`. `backend/main.py`
+is a legacy FastAPI duplicate of the same routes and is **not deployed**.
 
-## 1. Build
+## Environment
 
-```bash
-npm install              # installs BOTH the frontend build deps and the
-                         # backend runtime deps (express, @libsql/client)
-npm run build            # → dist/  (static SPA, incl. index.html)
+`.env.production` (committed, baked into the bundle at build time):
+
+```
+VITE_API_URL=https://gtsu110-api.astrikos.xyz:8443
+VITE_SOCKET_URL=https://gtsu110-api.astrikos.xyz:8443
 ```
 
-The backend needs no separate install — its deps are in the root `package.json`.
-The SQLite DB (`data/flights.db`) and seed CSVs (`data/csvs/`) are committed, so
-the API has data on first boot; if the DB is empty, `server.js` auto-seeds from
-the CSVs.
-
-## 2. Start the PM2 processes
-
-**One command** (recommended) — uses `ecosystem.config.cjs`:
+## Build & start
 
 ```bash
+cd <repo>
+npm install
+npm run build                                    # → dist/
+
+# Both processes at once (ecosystem.config.cjs pins ports + pm2 names):
 pm2 start ecosystem.config.cjs
 pm2 save
 ```
 
-Or the explicit two-command form (same result):
+Equivalent explicit form:
 
 ```bash
-# Frontend — static SPA on 3213 (--spa = index.html fallback for React Router)
-pm2 serve ./dist 3213 --name "gtsu_frontend_3213" --spa
-
-# Backend API on 3013
-PORT=3013 pm2 start server.js --name "gtsu_backend_3013"
-
+pm2 start serve --name "gtsu110_3213" -- ./dist -s -p 3213
+PORT=3013 pm2 start ./server.js --name "gtsu110_be_3013"
 pm2 save
 ```
 
-Optional — survive reboots: run `pm2 startup` once and follow the printed
-command, then `pm2 save`.
+## nginx
 
-Quick check (before nginx): `curl http://127.0.0.1:3013/api/health` →
-`{"status":"ok","db":"…/flights.db","db_exists":true}`, and
-`curl -I http://127.0.0.1:3213` → `200 OK`.
-
----
-
-## 3. nginx — local block (frontend + API split)
-
-Drop this in `/etc/nginx/sites-available/gtsu-110` (then symlink into
-`sites-enabled/`), or as a `server {}` inside `/etc/nginx/conf.d/gtsu-110.conf`.
-The **order matters**: `location /api/` comes before `location /`, and its
-`proxy_pass` has **no trailing slash** so the `/api` prefix is preserved (the
-Express routes are `/api/flights`, `/api/health`, …).
+Append to `/etc/nginx/conf/astrikos.conf` — frontend:
 
 ```nginx
 server {
-        listen 80;
-        server_name _;          # catch-all: works via localhost or the box's LAN IP
-
-        # API → backend (server.js) on 3013 — keep the /api prefix
-        location /api/ {
-                proxy_pass http://127.0.0.1:3013;
-                proxy_set_header Host $host;
-        }
-
-        # Frontend → static SPA on 3213
-        location / {
-                proxy_pass http://127.0.0.1:3213;
-                proxy_set_header Host $host;
-        }
+    listen 8443 ssl;
+    ssl_certificate     /etc/certs/astrikos.xyz/fullchain.pem;
+    ssl_certificate_key /etc/certs/astrikos.xyz/privkey.pem;
+    server_name gtsu110.astrikos.xyz;
+    location / {
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        proxy_pass http://127.0.0.1:3213;
+    }
 }
 ```
 
-> If nginx already has a `default_server` on port 80, either replace that block
-> or give this one a real `server_name` (e.g. the machine's hostname) so it
-> doesn't collide.
+Append to `/etc/nginx/conf/astriverse.conf` — backend (REST + WS, one block).
+Requires `map $http_upgrade $connection_upgrade { … }` once at the top of the file:
 
-Then:
+```nginx
+server {
+    listen 8443 ssl;
+    ssl_certificate     /etc/certs/astrikos.xyz/fullchain.pem;
+    ssl_certificate_key /etc/certs/astrikos.xyz/privkey.pem;
+    server_name gtsu110-api.astrikos.xyz;
+    location / {
+        proxy_pass http://127.0.0.1:3013;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 7d;
+        proxy_send_timeout 7d;
+        proxy_read_timeout 7d;
+        proxy_buffering off;
+    }
+}
+```
+
+Apply:
 
 ```bash
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
----
+## Cloudflare DNS
 
-## 4. Verify
+- `gtsu110.astrikos.xyz` → **Orange** (proxied)
+- `gtsu110-api.astrikos.xyz` → **Gray** (DNS-only)
 
-1. `curl http://localhost/api/health` → `{"status":"ok",…}` (nginx → backend).
-2. Open `http://localhost/` (or `http://<box-LAN-IP>/`) in a browser → log in
-   with `admin` / `admin123`.
-3. Go to **Post-Flight Analysis** → the flight list loads from `/api/flights`.
-   If it's empty or errors, check the browser Network tab: the `/api/...`
-   request should 200; if it 404s, `location /api/` isn't pointing at `:3013`.
-4. Deep-link a client route (e.g. `http://localhost/simulator`) and refresh — it
-   should still load (SPA fallback via `--spa`), not 404.
-
-> The Python `backend/main.py` (FastAPI) is **not** used here — `server.js` is
-> the API server.
-
----
-
-## Updating the deploy
+## Verify
 
 ```bash
-git pull origin main
-npm install
-npm run build
-pm2 reload ecosystem.config.cjs   # or: pm2 reload gtsu_frontend_3213 gtsu_backend_3013
+curl -k https://gtsu110.astrikos.xyz:8443            # SPA HTML
+curl -k https://gtsu110-api.astrikos.xyz:8443/api/health   # {"status":"ok",…}
+curl -k https://gtsu110-api.astrikos.xyz:8443/api/flights   # flight list JSON
 ```
+
+## Data
+
+`server.js` reads/writes `data/flights.db` and `data/csvs/` relative to the repo
+root. Both must be present and writable by the pm2 user on the server.

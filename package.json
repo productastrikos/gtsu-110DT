@@ -13,12 +13,12 @@
   },
   "dependencies": {
     "@libsql/client": "^0.14.0",
-    "express": "^4.18.3",
     "@react-three/drei": "^9.49.0",
     "@react-three/fiber": "^8.13.0",
     "@supabase/supabase-js": "^2.57.4",
     "axios": "^1.16.0",
     "chart.js": "^4.5.1",
+    "express": "^4.18.3",
     "framer-motion": "^12.24.12",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
@@ -27,6 +27,7 @@
     "react-router-dom": "^7.15.0",
     "socket.io-client": "^4.8.3",
     "three": "^0.161.0",
+    "three-mesh-bvh": "^0.9.11",
     "zustand": "^5.0.9"
   },
   "devDependencies": {

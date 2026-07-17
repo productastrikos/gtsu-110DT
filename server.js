@@ -10,7 +10,7 @@ const __dirname  = dirname(__filename);
 const DB_PATH  = join(__dirname, 'data', 'flights.db');
 const CSV_DIR  = join(__dirname, 'data', 'csvs');
 const DIST_DIR = join(__dirname, 'dist');
-const PORT     = process.env.PORT || 8000;
+const PORT     = process.env.PORT || 3013;
 
 mkdirSync(join(__dirname, 'data'), { recursive: true });
 mkdirSync(CSV_DIR, { recursive: true });

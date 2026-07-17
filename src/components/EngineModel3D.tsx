@@ -1,41 +1,66 @@
 /**
  * EngineModel3D
  *
- * Lean 3D engine viewer with hotspot markers overlaid on individual
- * components. Each page provides its own hotspot list (per-page metrics,
- * thresholds, status colors).
+ * 3D digital twin built on a PT6C-67C free-turbine turboshaft cutaway, rendered
+ * in a single uniform colour so the hardware reads by SHAPE rather than by the
+ * asset's photoreal paintwork.
  *
- * The engine mesh inside the inner <group> rotates with Ngg RPM; the
- * hotspots and labels live OUTSIDE that group so they stay stationary
- * and readable while the engine spins beneath them.
+ * Three things drive the model from a CycleTraceSample:
+ *   1. Per-section status glow  — emissive injected by SECTION (see SECTIONS)
+ *   2. Rotor spin               — N1 and N2 spools turn at their own speeds
+ *   3. Hover                    — point at the GEOMETRY to inspect a section
+ *
+ * Sections are resolved from a position's axial station + radius, NOT from mesh
+ * names: the asset's meshes are texture groups that each span the whole engine,
+ * so no mesh maps 1:1 to a section. The same rule runs in two places — in the
+ * shader (to tint) and on the CPU against the raycast hit (to identify what the
+ * cursor is over). Both x and radius are invariant under the rotor's X-axis
+ * spin, so the mapping holds on spinning geometry too.
  */
 
 import { Component, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, useGLTF, Environment, Lightformer, Html } from '@react-three/drei';
+import type { ThreeEvent } from '@react-three/fiber';
+import { OrbitControls, useGLTF, Environment, Lightformer } from '@react-three/drei';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import * as THREE from 'three';
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import type { CycleTraceSample } from '../types/engine';
 import { useGTSUStore } from '../store/useGTSUStore';
 
-// NOTE: the file on disk is all-lowercase (public/turboshaftengine.glb).
-// The path MUST match exactly — case-sensitive hosts (and Vite's asset
-// server) 404 on a casing mismatch, which blanks the 3D twin.
-const MODEL_PATH = '/turboshaftengine.glb';
-const MAX_RPM = 22000;
+// Hovering means raycasting the real engine — ~670k triangles. three's default
+// raycast is linear per triangle and would stall the pointer; a BVH makes it
+// effectively free. Installed once, at module scope.
+// NOTE: three-mesh-bvh must stay >= 0.9 — 0.5.x (what drei pulls in transitively)
+// calls Triangle.getUV(), which three removed by r155, so its raycast throws on
+// the r161 we run.
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+const MODEL_PATH = '/pt6c-67c.glb';
+// Draco decoder is served from public/draco/ — NOT the gstatic CDN — so the
+// twin still loads with no network (matches the offline-safe Environment below).
+const DRACO_PATH = '/draco/';
+
+const MAX_N1_RPM = 22000;   // gas-generator governed reference
+const MAX_N2_RPM = 33000;   // power/free-turbine governed reference
 
 // ── Hotspot model ───────────────────────────────────────────────────────
 
 export type HotspotSeverity = 'good' | 'warn' | 'orange' | 'bad';
 
+/** One monitored component. `section` says which part of the engine it lives in;
+ *  hovering that section's geometry surfaces every component mapped to it. */
 export interface EngineHotspot {
   id:        string;
-  position:  [number, number, number];     // world coords in the normalized engine frame
+  section:   SectionKey;
   label:     string;
-  value:     string;                       // primary readout, e.g. "78%"
-  metric?:   string;                       // optional secondary line, e.g. "wear · 870 hrs left"
+  value:     string;
+  metric?:   string;
   severity:  HotspotSeverity;
-  delta?:    string;                       // optional small badge, e.g. "+4.2%"
+  delta?:    string;
   deltaTone?:'good' | 'bad';
 }
 
@@ -51,8 +76,7 @@ const SEV_COLOR: Record<HotspotSeverity, string> = {
 const HAS_WEBGL: boolean = (() => {
   try {
     const c = document.createElement('canvas');
-    const ctx = c.getContext('webgl2') || c.getContext('webgl');
-    return !!ctx;
+    return !!(c.getContext('webgl2') || c.getContext('webgl'));
   } catch { return false; }
 })();
 
@@ -86,449 +110,316 @@ function WebGLUnavailable() {
   );
 }
 
-// ── Engine mesh (selective rotation) ───────────────────────────────────
-// This GLB is one merged mesh whose primitives are split by MATERIAL: the
-// casing/structure use greyscale steel, while the rotating blades/discs use
-// CHROMATIC materials (reddish / bluish). We spin only the chromatic parts —
-// i.e. the parts that actually rotate in a turboshaft — leaving the casing
-// static. `isRotorMaterialColor` decides per source material.
-function isRotorMaterialColor(col?: THREE.Color): boolean {
-  if (!col) return false;
-  return Math.abs(col.r - col.g) > 0.06 || Math.abs(col.g - col.b) > 0.06 || Math.abs(col.r - col.b) > 0.06;
+// ── Engine sections ─────────────────────────────────────────────────────
+// Bounds are in MODEL space: the GLB is baked so the shaft axis is the X axis
+// through the origin, and the engine spans x −1.30 (air inlet, rear) to +1.30
+// (exhaust, front). `r` is the radius from the shaft axis.
+//
+// The PT6C is REVERSE-FLOW: its annular combustor wraps *around* the
+// gas-generator turbine at the same axial station. They are therefore split by
+// RADIUS — combustor outboard, gas-gen turbine inboard — which an axial band
+// alone cannot do. First match wins.
+
+export type SectionKey =
+  | 'inlet' | 'compressor' | 'gas-gen-turbine' | 'combustor'
+  | 'power-turbine' | 'exhaust';
+
+export interface SectionDef {
+  key: SectionKey;
+  x0: number; x1: number;
+  r0: number; r1: number;
+  label: string;
+  /** What the section is, for the hover card. */
+  blurb: string;
+  color: string;
 }
 
-// ── GTSU section identity (base albedo per section for contrast) ──────────
-// Even though the mesh is a generic turboshaft, we tint each region so the
-// twin READS as the GTSU-110: distinct inlet / compressor / hot-section /
-// power-turbine / output-shaft / gearbox colours give the "sections" contrast.
-export type SectionKey =
-  | 'inlet' | 'compressor' | 'combustor' | 'gas-gen-turbine'
-  | 'power-turbine' | 'output-shaft' | 'gearbox' | 'other';
-
-export const SECTION_TINT: Record<SectionKey, { color: string; metalness: number; roughness: number; label: string; sub: string }> = {
-  'inlet':           { color: '#64748b', metalness: 0.45, roughness: 0.50, label: 'Inlet',           sub: 'air intake' },
-  'compressor':      { color: '#3b82f6', metalness: 0.52, roughness: 0.40, label: 'Compressor',      sub: 'N1 spool' },
-  'combustor':       { color: '#b06a3f', metalness: 0.42, roughness: 0.50, label: 'Combustor',       sub: 'annular' },
-  'gas-gen-turbine': { color: '#c2703f', metalness: 0.56, roughness: 0.38, label: 'Gas-Gen Turbine', sub: 'N1 · HP' },
-  'power-turbine':   { color: '#a855f7', metalness: 0.52, roughness: 0.40, label: 'Power Turbine',   sub: 'N2 · free' },
-  'output-shaft':    { color: '#ec4899', metalness: 0.55, roughness: 0.42, label: 'Output Shaft',    sub: 'to load' },
-  'gearbox':         { color: '#78716c', metalness: 0.55, roughness: 0.50, label: 'Gearbox',         sub: 'accessory' },
-  'other':           { color: '#7c848e', metalness: 0.25, roughness: 0.60, label: 'Structure',       sub: '' },
-};
-
-// ── Per-primitive component palette ─────────────────────────────────────────
-// This GLB is a single merged mesh ("TurboShaft Engine Assembly") split into
-// several MATERIAL primitives (a large steel body + coloured sub-parts). Three
-// loads each primitive as its own sub-mesh, so we colour each one distinctly —
-// every individual component then reads as a separate part. Colours avoid the
-// RAG status hues (green/amber/red) reserved for the live health emissive.
-const ENGINE_PART_PALETTE = [
-  '#5a7a9e', // main body / casing — calm steel blue
-  '#d1587a', // rose
-  '#46a5c9', // cyan
-  '#e0a458', // gold
-  '#9b6fd4', // purple
-  '#4fb0a5', // teal
-  '#c98b3a', // amber
-  '#e07a5f', // terracotta
+export const SECTIONS: SectionDef[] = [
+  { key: 'inlet',           x0: -1.31, x1: -0.82, r0: 0,    r1: 9,    label: 'Inlet & Accessories', blurb: 'Air intake at the rear, with the accessory case and control unit', color: '#64748b' },
+  { key: 'compressor',      x0: -0.82, x1:  0.08, r0: 0,    r1: 9,    label: 'Compressor',          blurb: 'Axial stages + centrifugal impeller — driven by the N1 spool', color: '#3b82f6' },
+  { key: 'gas-gen-turbine', x0:  0.08, x1:  0.45, r0: 0,    r1: 0.21, label: 'Gas-Gen Turbine',     blurb: 'HP turbine — extracts work to drive the compressor (N1)', color: '#c2703f' },
+  { key: 'combustor',       x0:  0.08, x1:  0.62, r0: 0.21, r1: 9,    label: 'Combustor',           blurb: 'Annular reverse-flow can wrapping the gas-generator turbine', color: '#b06a3f' },
+  { key: 'power-turbine',   x0:  0.62, x1:  0.88, r0: 0,    r1: 9,    label: 'Power Turbine',       blurb: 'Free turbine (N2) — mechanically independent, drives the load', color: '#a855f7' },
+  { key: 'exhaust',         x0:  0.88, x1:  1.31, r0: 0,    r1: 9,    label: 'Exhaust',             blurb: 'Gas path exit and rear support struts', color: '#78716c' },
 ];
 
-// Labelled GTSU sections positioned along the engine axis (X). These make the
-// twin identifiable as a GTSU even though the mesh is a generic TS engine.
-export interface SectionTagDef { key: SectionKey; position: [number, number, number]; }
-const SECTION_LABELS: SectionTagDef[] = [
-  { key: 'inlet',           position: [-1.55, -0.55, 0] },
-  { key: 'compressor',      position: [-0.85, -0.78, 0] },
-  { key: 'combustor',       position: [-0.05, -0.55, 0] },
-  { key: 'gas-gen-turbine', position: [ 0.60, -0.78, 0] },
-  { key: 'power-turbine',   position: [ 1.20, -0.55, 0] },
-  { key: 'output-shaft',    position: [ 1.62, -0.78, 0] },
-];
+/** Which section a point in MODEL space belongs to — the single source of truth
+ *  for "what part is this?". Mirrored in GLSL inside attachSectionShader; keep
+ *  the two in step. Returns -1 outside every band. */
+function sectionAt(x: number, r: number): number {
+  for (let i = 0; i < SECTIONS.length; i++) {
+    const s = SECTIONS[i];
+    if (x >= s.x0 && x < s.x1 && r >= s.r0 && r < s.r1) return i;
+  }
+  return -1;
+}
 
-// ── Per-node health-status colouring ────────────────────────────────
-// Each mapped part always shows its health when the simulation is running.
-//   0 = ok       → green  (nominal / healthy)
-//   1 = warn     → amber  (approaching limit)
-//   2 = caution  → orange (at limit)
-//   3 = alert    → red    (exceeded limit)
-// When frame is null (simulation stopped) every part fades to dark.
+// ── Per-section health ──────────────────────────────────────────────────
+//   0 = ok → green · 1 = warn → amber · 2 = caution → orange · 3 = alert → red
+// With no frame (simulation stopped) every section fades dark.
+
+// This glow is layered OVER the asset's real PBR textures, whose basecolor is
+// genuinely dark (mean ≈72/67/64). Flat additive emissive at any readable level
+// therefore out-competes the texture and turns the engine into a solid blob, so
+// the shader weights it by a fresnel rim instead (see attachSectionShader) and
+// these intensities are tuned for that — they are NOT flat-add values.
 const SEV_EMISSIVE: [number, number, number, number][] = [
-  [0.00, 0.70, 0.22, 0.28], // 0 ok      – green   (calm, easy on the eye)
-  [0.85, 0.55, 0.00, 0.55], // 1 warn    – amber
-  [1.00, 0.28, 0.00, 0.72], // 2 caution – orange
-  [1.00, 0.00, 0.00, 0.95], // 3 alert   – red
+  [0.00, 0.70, 0.22, 0.10],
+  [0.85, 0.55, 0.00, 0.30],
+  [1.00, 0.28, 0.00, 0.55],
+  [1.00, 0.00, 0.00, 0.85],
 ];
-const DARK: [number, number, number, number] = [0, 0, 0, 0];
 
 type Sev = 0 | 1 | 2 | 3;
-function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
 
-// ── Turbine / hot-section: TGT temperature ───────────────────────────
-// Normal light-up peak ≈ 650–750 °C  →  green
-// Above normal peak                  →  escalate to red
-function jptHealthSev(jpt1: number): Sev {
-  if (jpt1 > 950) return 3;   // critical overtemp / hot start
-  if (jpt1 > 850) return 2;   // hot start zone
-  if (jpt1 > 750) return 1;   // above normal peak
-  return 0;                    // normal operating range
+/** Status wording + colour shown in the hover card header. */
+const SEV_STATUS: Record<Sev, { label: string; color: string }> = {
+  0: { label: 'OK',       color: '#16a34a' },
+  1: { label: 'WARN',     color: '#eab308' },
+  2: { label: 'DEGRADED', color: '#f97316' },
+  3: { label: 'CRITICAL', color: '#dc2626' },
+};
+
+/** Hot section — TGT (Turbine Gas Temperature). Ground limit 900 °C, flight 1020 °C. */
+function tgtSev(tgt: number): Sev {
+  if (tgt > 950) return 3;
+  if (tgt > 850) return 2;
+  if (tgt > 750) return 1;
+  return 0;
 }
-
-// ── Compressor blades: Ngg shaft speed ───────────────────────────────
-// Any spin in the normal range → green; flag only near/over speed limit
-function nggHealthSev(pct: number): Sev {
-  if (pct > 98) return 3;    // overspeed
-  if (pct > 93) return 2;    // near overspeed
-  if (pct > 88) return 1;    // above nominal target
-  return 0;                   // healthy speed range
+/** Compressor — N1 shaft speed as % of governed max. */
+function n1Sev(pct: number): Sev {
+  if (pct > 98) return 3;
+  if (pct > 93) return 2;
+  if (pct > 88) return 1;
+  return 0;
 }
-
-// ── Shaft / gearbox: vibration ────────────────────────────────────────
-function vibHealthSev(vib: number): Sev {
+/** Rotating assembly — vibration (mm/s). */
+function vibSev(vib: number): Sev {
   if (vib > 5.0) return 3;
   if (vib > 3.0) return 2;
   if (vib > 1.5) return 1;
   return 0;
 }
 
-/** Maps named GLB nodes to a health-status function (used when a model exposes
- *  per-component nodes). The current merged-mesh GLB has none, so this is inert. */
-const NODE_SEV: Record<string, (f: CycleTraceSample) => Sev> = {
-  // HP turbine — temperature (hot section)
-  'hp_turbine_0':    f => jptHealthSev(f.jpt1),
-  // Power turbine disc — temperature (hot section rotor)
-  'power_turbine_0': f => jptHealthSev(f.jpt1),
-  // Output shaft — vibration
-  'output_shaft_0':  f => vibHealthSev(f.vibration),
-  // Compressor spool/drum — shaft speed
-  'compressor_0':    f => nggHealthSev(f.nggPct),
-  // Compressor blade discs — shaft speed
-  'compressor_1':    f => nggHealthSev(f.nggPct),
-  'compressor_2':    f => nggHealthSev(f.nggPct),
-  'compressor_3':    f => nggHealthSev(f.nggPct),
-  'compressor_4':    f => nggHealthSev(f.nggPct),
-  'compressor_5':    f => nggHealthSev(f.nggPct),
-  'compressor_6':    f => nggHealthSev(f.nggPct),
-  'compressor_7':    f => nggHealthSev(f.nggPct),
-  'compressor_8':    f => nggHealthSev(f.nggPct),
-  'compressor_9':    f => nggHealthSev(f.nggPct),
-  'compressor_10':   f => nggHealthSev(f.nggPct),
-  'compressor_11':   f => nggHealthSev(f.nggPct),
-};
+/** Health per section, or -1 for sections with no mapped metric (stay dark). */
+function sectionSev(key: SectionKey, f: CycleTraceSample): Sev | -1 {
+  switch (key) {
+    case 'compressor':      return n1Sev(f.nggPct);
+    case 'gas-gen-turbine': return tgtSev(f.jpt1);
+    case 'combustor':       return tgtSev(f.jpt1);
+    case 'power-turbine':   return vibSev(f.vibration);
+    case 'inlet':
+    case 'exhaust':
+    default:                return -1;
+  }
+}
 
-// Per-node lerp state (persists across renders for smooth transitions)
-const _nodeLerp = new Map<string, [number,number,number,number]>();
-const LERP_SPEED = 3; // units per second
+// ── Section-aware material ──────────────────────────────────────────────
+// Injects a section lookup into MeshStandardMaterial. Keeps the asset's
+// basecolor/metal-rough/normal maps intact and only ADDS emissive on top.
 
-function EngineMesh({ frame }: { frame: CycleTraceSample | null }) {
-  const { scene } = useGLTF(MODEL_PATH);
+interface SectionUniforms {
+  uSecBounds: { value: THREE.Vector4[] };   // x0, x1, r0, r1
+  uSecColor:  { value: THREE.Vector3[] };
+  uSecInt:    { value: number[] };
+  uHover:     { value: number };            // index of hovered section, -1 = none
+}
 
-  /**
-   * A single pivot Group positioned exactly at the shaft centre-line.
-   * Rotating this group around X makes all rotor children spin in place.
-   */
-  const pivotRef = useRef<THREE.Group | null>(null);
+function makeSectionUniforms(): SectionUniforms {
+  return {
+    uSecBounds: { value: SECTIONS.map(s => new THREE.Vector4(s.x0, s.x1, s.r0, s.r1)) },
+    uSecColor:  { value: SECTIONS.map(() => new THREE.Vector3(0, 0, 0)) },
+    uSecInt:    { value: SECTIONS.map(() => 0) },
+    uHover:     { value: -1 },
+  };
+}
 
-  const normalized = useMemo(() => {
-    const root = scene.clone();
+const N_SEC = SECTIONS.length;
 
-    // ── 1. Normalise scale + centre ──────────────────────────────────
-    const box    = new THREE.Box3().setFromObject(root);
-    const size   = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const s      = 2.6 / maxDim;
-    // Shaft axis = the engine's longest dimension (its axis of revolution).
-    const shaftAxis: 'x' | 'y' | 'z' =
-      size.x >= size.y && size.x >= size.z ? 'x' : (size.y >= size.z ? 'y' : 'z');
-    root.scale.setScalar(s);
-    const center = box.getCenter(new THREE.Vector3()).multiplyScalar(s);
-    root.position.sub(center);
+function attachSectionShader(mat: THREE.Material, u: SectionUniforms) {
+  const std = mat as THREE.MeshStandardMaterial;
+  std.onBeforeCompile = (shader) => {
+    shader.uniforms.uSecBounds = u.uSecBounds;
+    shader.uniforms.uSecColor  = u.uSecColor;
+    shader.uniforms.uSecInt    = u.uSecInt;
+    shader.uniforms.uHover     = u.uHover;
 
-    // Flush world matrices so worldToLocal / getWorldPosition are accurate
-    root.updateWorldMatrix(true, true);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vSecPos;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\nvSecPos = position;`);
 
-    // ── 2. Apply materials — one distinct colour per sub-mesh/primitive,
-    //     and flag the ROTATING parts by their original (chromatic) material. ─
-    let partIndex = 0;
-    const rotorMeshes: THREE.Object3D[] = [];
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vSecPos;
+uniform vec4  uSecBounds[${N_SEC}];
+uniform vec3  uSecColor[${N_SEC}];
+uniform float uSecInt[${N_SEC}];
+uniform int   uHover;`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+{
+  // Mirrors sectionAt() on the CPU. x and radius are both invariant under the
+  // rotor's X-axis spin, so a spinning blade keeps the section of the disc it
+  // belongs to.
+  float secR = length(vSecPos.yz);
+  float rim  = 1.0 - abs(dot(normalize(normal), normalize(vViewPosition)));
+  for (int i = 0; i < ${N_SEC}; i++) {
+    vec4 b = uSecBounds[i];
+    if (vSecPos.x >= b.x && vSecPos.x < b.y && secR >= b.z && secR < b.w) {
+      // Fresnel rim: the glow rides the silhouette and grazing angles, leaving
+      // the surface readable face-on. A flat add at a visible intensity buries
+      // the shape entirely.
+      totalEmissiveRadiance += uSecColor[i] * uSecInt[i] * pow(rim, 3.0);
+      // Hover: lift the whole section so the part under the cursor is obvious.
+      if (i == uHover) {
+        totalEmissiveRadiance += vec3(0.16, 0.22, 0.30) * (0.35 + 0.65 * pow(rim, 2.0));
+      }
+      break;
+    }
+  }
+}`);
+  };
+  std.customProgramCacheKey = () => 'gtsu-section';
+  std.needsUpdate = true;
+}
+
+// ── Engine mesh ─────────────────────────────────────────────────────────
+
+/** The engine's single colour. Everything is this material — the asset's
+ *  photoreal texture sets are deliberately not bound, so the hardware reads by
+ *  shape and shading alone and the status glow has nothing to compete with. */
+const ENGINE_COLOR = '#8d9aa8';
+
+function EngineMesh({
+  frame, uniforms, onHover,
+}: {
+  frame: CycleTraceSample | null;
+  uniforms: SectionUniforms;
+  onHover: (section: number, clientX: number, clientY: number) => void;
+}) {
+  const { scene } = useGLTF(MODEL_PATH, DRACO_PATH);
+
+  const { root, rotor1, rotor2 } = useMemo(() => {
+    const root = scene.clone(true);
+    const rotor1: THREE.Object3D[] = [];
+    const rotor2: THREE.Object3D[] = [];
+
+    // One material for the whole engine.
+    // side: DoubleSide is required, not cosmetic — this is a CUTAWAY. Its shells
+    // are open surfaces, so with front-face culling every sliced casing shows as
+    // a hole and the internals behind it vanish.
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(ENGINE_COLOR),
+      metalness: 0.55,
+      roughness: 0.46,
+      side: THREE.DoubleSide,
+    });
+    attachSectionShader(mat, uniforms);
+
+    // The GLB is already baked: shaft axis = X through the origin, longest
+    // dimension normalised to 2.6 units. No runtime re-centring needed.
     root.traverse((obj: THREE.Object3D) => {
       const mesh = obj as THREE.Mesh;
-      if (!mesh.isMesh || !mesh.material) return;
-
-      const srcMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-
-      // Rotor detection from the ORIGINAL material colour (before recolouring):
-      // chromatic materials = blades/discs (rotate); greyscale = casing (static).
-      if (srcMats.some(m => isRotorMaterialColor((m as THREE.MeshStandardMaterial).color))) {
-        rotorMeshes.push(mesh);
-      }
-
-      // Distinct palette colour per primitive/sub-mesh (visual identification).
-      const partColor = ENGINE_PART_PALETTE[partIndex % ENGINE_PART_PALETTE.length];
-      partIndex++;
-      const ownMats = srcMats.map(m => {
-        const c = (m as THREE.MeshStandardMaterial).clone();
-        c.emissive          = new THREE.Color(0x000000);
-        c.emissiveIntensity = 0;
-        c.color             = new THREE.Color(partColor);
-        c.metalness         = 0.55;
-        c.roughness         = 0.42;
-        c.transparent       = false;
-        c.opacity           = 1;
-        return c;
-      });
-      mesh.material = Array.isArray(mesh.material) ? ownMats : ownMats[0];
+      if (!mesh.isMesh) return;
+      mesh.material = mat;
+      // BVH per geometry — without it, hover raycasts walk every triangle.
+      mesh.geometry.computeBoundsTree?.();
     });
 
-    // ── 3. Reparent ONLY the rotating parts (chromatic blade/disc meshes)
-    //     into a pivot on the shaft centre-line. The casing stays put. ──
-    if (rotorMeshes.length > 0) {
-      // Shaft centre = combined bbox of all rotor geometry (world space).
-      const shaftBox = new THREE.Box3();
-      rotorMeshes.forEach(o => shaftBox.expandByObject(o));
-      const shaftWorldCenter = shaftBox.getCenter(new THREE.Vector3());
-
-      const pivot = new THREE.Group();
-      pivot.position.copy(root.worldToLocal(shaftWorldCenter.clone()));
-      root.add(pivot);
-      root.updateWorldMatrix(true, true);   // flush so attach() sees current matrices
-
-      // Object3D.attach() reparents each mesh while PRESERVING its full world
-      // transform (position + orientation + scale). This matters because the
-      // GLB's root node carries a 90° X quaternion: a position-only reparent
-      // (getWorldPosition + worldToLocal) dropped that rotation, flinging the
-      // rotor discs out of the casing as a phantom "second engine". attach()
-      // keeps every rotor seated exactly where and how it was authored, so the
-      // only thing the pivot changes is the shaft-axis spin.
-      for (const obj of rotorMeshes) {
-        pivot.attach(obj);
-      }
-
-      // Stable name so we can find the pivot after render (setting the ref
-      // inside useMemo breaks under React 18 StrictMode double-invoke).
-      pivot.name = '__shaft_pivot__';
+    // Rotor nodes were split out at build time from the detected blade rings.
+    for (const child of root.children) {
+      if (child.name.endsWith('__rotor1')) rotor1.push(child);
+      else if (child.name.endsWith('__rotor2')) rotor2.push(child);
     }
+    return { root, rotor1, rotor2 };
+  }, [scene, uniforms]);
 
-    root.userData.shaftAxis = shaftAxis;
-    return root;
-  }, [scene]);
+  useEffect(() => () => {
+    root.traverse((o: THREE.Object3D) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) m.geometry.disposeBoundsTree?.();
+    });
+  }, [root]);
 
-  // Sync the pivot ref AFTER the normalised tree is committed to the scene.
-  // useEffect is safe here: it runs after React commits, so `normalized`
-  // is the tree that R3F will actually render via <primitive>.
-  useEffect(() => {
-    pivotRef.current =
-      (normalized.getObjectByName('__shaft_pivot__') as THREE.Group) ?? null;
-    return () => { pivotRef.current = null; };
-  }, [normalized]);
+  // Resolve the hit to a section. e.point is WORLD space, but the model sits at
+  // the origin un-transformed, and the rotors only spin about X — which changes
+  // neither x nor radius — so world coords can be used directly.
+  const handleMove = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    const p = e.point;
+    onHover(sectionAt(p.x, Math.hypot(p.y, p.z)), e.nativeEvent.clientX, e.nativeEvent.clientY);
+  };
+
+  const lerp = useRef<number[][]>(SECTIONS.map(() => [0, 0, 0, 0]));
 
   useFrame((state, delta) => {
-    // Playing in ANY mode: replay (▶), database console, or live stream.
-    const st        = useGTSUStore.getState();
-    const playing   = st.isPlaying || st.consoleIsPlaying || st.liveMode;
-    const rpm       = playing ? (frame?.ngg ?? 0) : 0;
-    // Rotation speed proportional to N1 (gas-generator) RPM — up to ~2.5 rev/s.
-    const radPerSec = (rpm / MAX_RPM) * 5 * Math.PI;
+    const st      = useGTSUStore.getState();
+    const playing = st.isPlaying || st.consoleIsPlaying || st.liveMode;
 
-    // Spin ONLY the rotor pivot (the chromatic blade/disc meshes) about the
-    // shaft axis; the casing stays static. Stops the instant playback pauses.
-    if (pivotRef.current) {
-      const axis = (normalized.userData.shaftAxis as 'x' | 'y' | 'z') ?? 'z';
-      pivotRef.current.rotation[axis] += radPerSec * delta;
-    }
+    // ── rotor spin ──
+    // N1 = gas generator (compressor + its turbine + shaft). N2 = free power
+    // turbine. Both ride the X axis, which the GLB is baked around.
+    const n1 = playing ? (frame?.ngg ?? 0) : 0;
+    const n2 = playing ? (n1 / MAX_N1_RPM) * MAX_N2_RPM * 0.95 : 0;
+    const w1 = (n1 / MAX_N1_RPM) * 5 * Math.PI;
+    const w2 = (n2 / MAX_N2_RPM) * 5 * Math.PI;
+    for (const r of rotor1) r.rotation.x += w1 * delta;
+    for (const r of rotor2) r.rotation.x -= w2 * delta;   // free turbine counter-rotates
 
-    // Pulse multiplier for non-ok states: slow breathing effect (0.7–1.0)
+    // ── section status glow ──
     const pulse = 0.85 + Math.sin(state.clock.elapsedTime * 3.5) * 0.15;
-
-    // Per-node status colouring — lerp toward target severity colour
-    normalized.traverse((obj: THREE.Object3D) => {
-      const mesh = obj as THREE.Mesh;
-      if (!mesh.isMesh || !mesh.material) return;
-
-      const sevFn = NODE_SEV[obj.name];
-      const sev   = (frame && sevFn) ? sevFn(frame) : -1;
-      // -1 = no frame / unmapped → fade to dark
-      const target = sev >= 0 ? SEV_EMISSIVE[sev] : DARK;
-
-      // Initialise lerp state on first encounter
-      if (!_nodeLerp.has(obj.name)) _nodeLerp.set(obj.name, [0,0,0,0]);
-      const cur = _nodeLerp.get(obj.name)!;
-      const t   = clamp01(LERP_SPEED * delta);
-      cur[0] += (target[0] - cur[0]) * t;
-      cur[1] += (target[1] - cur[1]) * t;
-      cur[2] += (target[2] - cur[2]) * t;
-      cur[3] += (target[3] - cur[3]) * t;
-
-      // Apply pulse only on warn/caution/alert so green stays steady
-      const intensityMod = sev > 0 ? pulse : 1.0;
-
-      (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach(m => {
-        const std = m as THREE.MeshStandardMaterial;
-        if ('emissive' in std) {
-          std.emissive.setRGB(cur[0], cur[1], cur[2]);
-          std.emissiveIntensity = cur[3] * intensityMod;
-        }
-      });
+    const t = Math.max(0, Math.min(1, 3 * delta));
+    SECTIONS.forEach((s, i) => {
+      const sev    = frame ? sectionSev(s.key, frame) : -1;
+      const target = sev >= 0 ? SEV_EMISSIVE[sev] : [0, 0, 0, 0];
+      const cur    = lerp.current[i];
+      for (let k = 0; k < 4; k++) cur[k] += (target[k] - cur[k]) * t;
+      uniforms.uSecColor.value[i].set(cur[0], cur[1], cur[2]);
+      uniforms.uSecInt.value[i] = cur[3] * (sev > 0 ? pulse : 1);
     });
   });
 
-  return <primitive object={normalized} />;
-}
-
-// ── Hotspot pulse (per-marker animated dot) ─────────────────────────────
-
-function HotspotMarker({
-  hotspot, hovered, onHover, onClick, showLabels = true,
-}: {
-  hotspot: EngineHotspot;
-  hovered: boolean;
-  onHover: (id: string | null) => void;
-  onClick?: (id: string) => void;
-  showLabels?: boolean;
-}) {
-  const ringRef = useRef<THREE.Mesh>(null);
-  useFrame((state) => {
-    if (!ringRef.current) return;
-    const t = state.clock.getElapsedTime();
-    const s = 1 + Math.sin(t * 3) * 0.18;
-    ringRef.current.scale.setScalar(s);
-  });
-
-  const color = SEV_COLOR[hotspot.severity];
-
   return (
-    <group position={hotspot.position}>
-      {/* Core dot */}
-      <mesh
-        onPointerOver={(e) => { e.stopPropagation(); onHover(hotspot.id); }}
-        onPointerOut={() => onHover(null)}
-        onClick={(e) => { e.stopPropagation(); onClick?.(hotspot.id); }}
-      >
-        <sphereGeometry args={[0.04, 16, 16]} />
-        <meshBasicMaterial color={color} toneMapped={false} />
-      </mesh>
-
-      {/* Pulsing ring */}
-      <mesh ref={ringRef}>
-        <ringGeometry args={[0.06, 0.08, 32]} />
-        <meshBasicMaterial color={color} transparent opacity={0.45} side={THREE.DoubleSide} toneMapped={false} />
-      </mesh>
-
-      {/* Label card — always when showLabels, otherwise only on hover */}
-      {(showLabels || hovered) && (
-        <Html position={[0.08, 0.12, 0]} distanceFactor={6} occlude={false} zIndexRange={[10, 0]}>
-          <div
-            style={{
-              pointerEvents: 'none',
-              background: 'rgba(8,12,18,0.92)',
-              border: `1px solid ${color}`,
-              borderRadius: 4,
-              padding: hovered ? '6px 10px' : '4px 8px',
-              fontFamily: 'monospace',
-              transform: 'translate(0, -100%)',
-              whiteSpace: 'nowrap',
-              transition: 'padding 0.15s ease',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-            }}
-          >
-            <div style={{ fontSize: 7, fontWeight: 700, color: '#afc3d8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-              {hotspot.label}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 2 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color }}>{hotspot.value}</span>
-              {hotspot.delta && (
-                <span style={{
-                  fontSize: 7, fontWeight: 700,
-                  color: hotspot.deltaTone === 'bad' ? '#dc2626' : '#16a34a',
-                }}>{hotspot.delta}</span>
-              )}
-            </div>
-            {hovered && hotspot.metric && (
-              <div style={{ fontSize: 7, color: '#8ca0b6', marginTop: 3, maxWidth: 180, whiteSpace: 'normal' }}>
-                {hotspot.metric}
-              </div>
-            )}
-          </div>
-        </Html>
-      )}
-    </group>
-  );
-}
-
-// ── Section tag (labels the GTSU sections along the engine) ─────────────────
-function SectionTag({ def }: { def: SectionTagDef }) {
-  const t = SECTION_TINT[def.key];
-  return (
-    <group position={def.position}>
-      <Html distanceFactor={7} occlude={false} zIndexRange={[5, 0]} center>
-        <div style={{
-          pointerEvents: 'none', display: 'flex', alignItems: 'center', gap: 5,
-          background: 'rgba(8,12,18,0.78)', border: `1px solid ${t.color}`,
-          borderRadius: 5, padding: '3px 7px', fontFamily: 'monospace', whiteSpace: 'nowrap',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
-        }}>
-          <span style={{ width: 7, height: 7, borderRadius: 2, background: t.color, flexShrink: 0 }} />
-          <span style={{ fontSize: 8, fontWeight: 700, color: '#e8eef5', letterSpacing: '0.04em' }}>{t.label}</span>
-          {t.sub && <span style={{ fontSize: 7, color: '#8ca0b6' }}>· {t.sub}</span>}
-        </div>
-      </Html>
-    </group>
+    <primitive
+      object={root}
+      onPointerMove={handleMove}
+      onPointerOut={() => onHover(-1, 0, 0)}
+    />
   );
 }
 
 // ── Scene ───────────────────────────────────────────────────────────────
 
 function Scene({
-  frame, hotspots, onHotspotClick, showLabels = true, showSections = true,
+  frame, uniforms, onHover,
 }: {
   frame: CycleTraceSample | null;
-  hotspots?: EngineHotspot[];
-  onHotspotClick?: (id: string) => void;
-  showLabels?: boolean;
-  showSections?: boolean;
+  uniforms: SectionUniforms;
+  onHover: (section: number, clientX: number, clientY: number) => void;
 }) {
-  const [hovered, setHovered] = useState<string | null>(null);
   return (
     <>
-      <ambientLight intensity={0.45} />
-      <directionalLight position={[6, 8, 6]} intensity={1.1} castShadow />
-      <directionalLight position={[-4, -2, -3]} intensity={0.4} color="#5fa8ff" />
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[6, 8, 6]} intensity={1.6} />
+      <directionalLight position={[-4, -2, -3]} intensity={0.5} color="#5fa8ff" />
 
       {/* Procedural studio environment for metal reflections.
           Built entirely on the GPU from Lightformers — no network/CDN fetch,
           so the results screen never breaks when offline. */}
       <EnvBoundary>
         <Environment resolution={256}>
-          <Lightformer intensity={1.2} position={[0, 5, -5]} scale={[10, 10, 1]} color="#ffffff" />
-          <Lightformer intensity={0.6} position={[-6, 1, 1]} scale={[10, 3, 1]} color="#9bc4ff" />
-          <Lightformer intensity={0.5} position={[6, -1, 2]} scale={[10, 3, 1]} color="#ffd9a0" />
+          <Lightformer intensity={1.4} position={[0, 5, -5]} scale={[10, 10, 1]} color="#ffffff" />
+          <Lightformer intensity={0.7} position={[-6, 1, 1]} scale={[10, 3, 1]} color="#9bc4ff" />
+          <Lightformer intensity={0.6} position={[6, -1, 2]} scale={[10, 3, 1]} color="#ffd9a0" />
         </Environment>
       </EnvBoundary>
 
-      {/* Engine mesh — separate suspense so a missing HDR doesn't block it */}
       <Suspense fallback={null}>
-        <group>
-          <EngineMesh frame={frame} />
-        </group>
+        <EngineMesh frame={frame} uniforms={uniforms} onHover={onHover} />
       </Suspense>
 
-      {showSections && SECTION_LABELS.map((s) => (
-        <SectionTag key={s.key} def={s} />
-      ))}
-
-      {hotspots?.map((h) => (
-        <HotspotMarker
-          key={h.id}
-          hotspot={h}
-          hovered={hovered === h.id}
-          onHover={setHovered}
-          onClick={onHotspotClick}
-          showLabels={showLabels}
-        />
-      ))}
-
-      <gridHelper args={[8, 16, 0x223344, 0x14202c]} position={[0, -1.4, 0]} />
-      <OrbitControls enableDamping dampingFactor={0.08} minDistance={2.2} maxDistance={14} target={[0, 0, 0]} />
-
+      <gridHelper args={[8, 16, 0x223344, 0x14202c]} position={[0, -0.95, 0]} />
+      <OrbitControls enableDamping dampingFactor={0.08} minDistance={1.2} maxDistance={12} target={[0, 0, 0]} />
     </>
   );
 }
@@ -539,85 +430,159 @@ export interface EngineModel3DProps {
   frame:          CycleTraceSample | null;
   hotspots?:      EngineHotspot[];
   onHotspotClick?: (id: string) => void;
-  /** Camera position. Default fits the full engine + hotspots. */
+  /** Camera position. Default fits the full engine. */
   cameraPosition?: [number, number, number];
-  /** When false, metric hotspot labels appear only on hover. Default true. */
-  showLabels?:    boolean;
-  /** When false, GTSU section tags are hidden. Default true. */
-  showSections?:  boolean;
 }
 
-export function EngineModel3D({ frame, hotspots, onHotspotClick, cameraPosition, showLabels = true, showSections = true }: EngineModel3DProps) {
+/** Card shown while the cursor is over a section of the engine. */
+function HoverCard({
+  def, sev, items, x, y,
+}: {
+  def: SectionDef;
+  sev: Sev | -1;
+  items: EngineHotspot[];
+  x: number; y: number;
+}) {
+  const status = sev >= 0 ? SEV_STATUS[sev as Sev] : { label: 'NO DATA', color: '#64748b' };
+  // Flip the card back over the cursor near the right/bottom edges so it never
+  // spills out of the panel.
+  const flipX = x > 0.62, flipY = y > 0.55;
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: `${x * 100}%`,
+        top: `${y * 100}%`,
+        transform: `translate(${flipX ? 'calc(-100% - 14px)' : '14px'}, ${flipY ? 'calc(-100% - 14px)' : '14px'})`,
+        pointerEvents: 'none', zIndex: 25,
+        minWidth: 210, maxWidth: 320,
+        background: 'rgba(8,12,18,0.95)',
+        border: `1px solid ${def.color}`,
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
+        fontFamily: 'monospace',
+        overflow: 'hidden',
+      }}
+    >
+      {/* header — the part's name */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 10px', background: 'rgba(255,255,255,0.04)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <span style={{ width: 8, height: 8, borderRadius: 2, background: def.color, flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#e8eef5', letterSpacing: '0.04em' }}>{def.label}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 8, fontWeight: 700, color: status.color, letterSpacing: '0.06em' }}>{status.label}</span>
+      </div>
+
+      <div style={{ padding: '7px 10px 8px' }}>
+        <div style={{ fontSize: 8, color: '#7f93a8', lineHeight: 1.5, marginBottom: items.length ? 7 : 0 }}>{def.blurb}</div>
+
+        {items.map((h, i) => (
+          <div key={h.id} style={{ marginTop: i ? 7 : 0, paddingTop: i ? 7 : 0, borderTop: i ? '1px solid rgba(255,255,255,0.07)' : 'none' }}>
+            <div style={{ fontSize: 7, fontWeight: 700, color: '#afc3d8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h.label}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginTop: 2 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: SEV_COLOR[h.severity] }}>{h.value}</span>
+              {h.delta && (
+                <span style={{ fontSize: 8, fontWeight: 700, color: h.deltaTone === 'bad' ? '#dc2626' : '#16a34a' }}>{h.delta}</span>
+              )}
+            </div>
+            {h.metric && (
+              <div style={{ fontSize: 8, color: '#8ca0b6', marginTop: 3, lineHeight: 1.5 }}>{h.metric}</div>
+            )}
+          </div>
+        ))}
+
+        {!items.length && (
+          <div style={{ fontSize: 8, color: '#5c6b7c', marginTop: 6, fontStyle: 'italic' }}>No monitored parameters on this section</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function EngineModel3D({ frame, hotspots, onHotspotClick, cameraPosition }: EngineModel3DProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [isFull, setIsFull] = useState(false);
+  const [hover, setHover] = useState<{ sec: number; x: number; y: number } | null>(null);
+  const uniforms = useMemo(makeSectionUniforms, []);
+
+  useEffect(() => {
+    const onChange = () => setIsFull(document.fullscreenElement === wrapRef.current);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const toggleFull = () => {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else wrapRef.current?.requestFullscreen?.().catch(() => { /* denied / unsupported */ });
+  };
+
+  // The raycast reports a section index + viewport coords; store the cursor as a
+  // FRACTION of the wrapper so the card positions correctly at any panel size
+  // and in fullscreen.
+  const handleHover = (sec: number, clientX: number, clientY: number) => {
+    uniforms.uHover.value = sec;
+    if (sec < 0) { setHover(null); return; }
+    const r = wrapRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setHover({ sec, x: (clientX - r.left) / r.width, y: (clientY - r.top) / r.height });
+  };
+
+  const hoveredDef = hover ? SECTIONS[hover.sec] : null;
+  const hoveredItems = hoveredDef ? (hotspots ?? []).filter(h => h.section === hoveredDef.key) : [];
+  const hoveredSev: Sev | -1 = hoveredDef && frame ? sectionSev(hoveredDef.key, frame) : -1;
+
   if (!HAS_WEBGL) return <WebGLUnavailable />;
+
   return (
     <WebGLBoundary>
-      <Canvas
-        camera={{ position: cameraPosition ?? [4.2, 2.6, 4.4], fov: 45 }}
-        gl={{ antialias: true, powerPreference: 'high-performance' }}
-        dpr={[1, 2]}
-        style={{ background: 'radial-gradient(ellipse at center, #0e1822 0%, #06090d 80%)' }}
+      {/* The wrapper is the fullscreen target, so it carries the background —
+          in fullscreen it becomes the whole display behind the canvas.
+          The explicit 100vw/100vh matters: `position: relative` (needed to anchor
+          the button) overrides the UA stylesheet's `position: fixed` on
+          :fullscreen, which is what would otherwise stretch the element to the
+          screen. Without this the element keeps its in-flow size and the canvas
+          never grows. */}
+      <div
+        ref={wrapRef}
+        style={{
+          position: 'relative',
+          width: isFull ? '100vw' : '100%',
+          height: isFull ? '100vh' : '100%',
+          background: 'radial-gradient(ellipse at center, #0e1822 0%, #06090d 80%)',
+        }}
       >
-        <Scene frame={frame} hotspots={hotspots} onHotspotClick={onHotspotClick} showLabels={showLabels} showSections={showSections} />
-      </Canvas>
+        <Canvas
+          camera={{ position: cameraPosition ?? [1.75, 0.95, 2.25], fov: 42 }}
+          gl={{ antialias: true, powerPreference: 'high-performance' }}
+          dpr={[1, 2]}
+          style={{ background: 'transparent' }}
+          onPointerMissed={() => handleHover(-1, 0, 0)}
+          onClick={() => { if (hoveredItems[0]) onHotspotClick?.(hoveredItems[0].id); }}
+        >
+          <Scene frame={frame} uniforms={uniforms} onHover={handleHover} />
+        </Canvas>
+
+        {hoveredDef && (
+          <HoverCard def={hoveredDef} sev={hoveredSev} items={hoveredItems} x={hover!.x} y={hover!.y} />
+        )}
+
+        <button
+          type="button"
+          onClick={toggleFull}
+          title={isFull ? 'Exit full screen (Esc)' : 'View full screen'}
+          style={{
+            position: 'absolute', bottom: 10, right: 10, zIndex: 20,
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: 'rgba(8,12,18,0.72)', border: '1px solid #24384d',
+            borderRadius: 6, padding: '5px 9px', cursor: 'pointer',
+            fontFamily: 'monospace', fontSize: 9, fontWeight: 700,
+            letterSpacing: '0.06em', color: '#afc3d8',
+          }}
+        >
+          {isFull ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+          {isFull ? 'EXIT' : 'FULL SCREEN'}
+        </button>
+      </div>
     </WebGLBoundary>
   );
 }
 
-// ── Section legend + label toggle controls (for use beside the canvas) ──────
-export function SectionLegend() {
-  const keys: SectionKey[] = ['inlet', 'compressor', 'combustor', 'gas-gen-turbine', 'power-turbine', 'output-shaft'];
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', padding: '4px 8px', fontFamily: 'monospace', fontSize: 9 }}>
-      {keys.map(k => {
-        const t = SECTION_TINT[k];
-        return (
-          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: t.color }} />
-            <span style={{ color: '#afc3d8' }}>{t.label}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Small toggle switch matching the app design system. */
-export function LabelToggle({ label, on, onChange }: { label: string; on: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      className={`gtsu-toggle ${on ? 'on' : ''}`}
-      onClick={() => onChange(!on)}
-      style={{ background: 'transparent', border: 'none', padding: 0 }}
-    >
-      <span className="tg-track"><span className="tg-knob" /></span>
-      <span className="tg-label">{label}</span>
-    </button>
-  );
-}
-
-// ── Legend component for use beside the canvas ──────────────────────────
-
-export function HotspotLegend({ items }: { items: EngineHotspot[] }) {
-  if (!items.length) return null;
-  const grouped = {
-    good:   items.filter(h => h.severity === 'good').length,
-    warn:   items.filter(h => h.severity === 'warn').length,
-    orange: items.filter(h => h.severity === 'orange').length,
-    bad:    items.filter(h => h.severity === 'bad').length,
-  };
-  return (
-    <div style={{ display: 'flex', gap: 10, padding: '6px 10px', fontFamily: 'monospace', fontSize: 10 }}>
-      {(['good', 'warn', 'orange', 'bad'] as const).map(sev => (
-        <div key={sev} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ width: 8, height: 8, borderRadius: 4, background: SEV_COLOR[sev] }} />
-          <span style={{ color: '#afc3d8' }}>
-            {sev === 'good' ? 'OK' : sev === 'warn' ? 'WARN' : sev === 'orange' ? 'DEGRADED' : 'CRITICAL'} · {grouped[sev]}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-useGLTF.preload(MODEL_PATH);
+useGLTF.preload(MODEL_PATH, DRACO_PATH);

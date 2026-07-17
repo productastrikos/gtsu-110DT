@@ -15,7 +15,7 @@ import { FAULT_LABELS, accumulateWear } from '../lib/flightSimulator';
 import { buildPostFlightHotspots } from '../lib/engineHotspots';
 import type { StartCycle, CycleStatus, FaultReason, FlightRecord, BackendFlight, ComponentWearRecord } from '../types/engine';
 import { LineChart } from '../components/LineChart';
-import { EngineModel3D, HotspotLegend, SectionLegend, LabelToggle } from '../components/EngineModel3D';
+import { EngineModel3D } from '../components/EngineModel3D';
 import {
   deriveN2, deriveSectionRatios, comparePressureRatio, NOMINAL_P2P1, MAX_NPT_RPM,
 } from '../lib/engineDerived';
@@ -54,8 +54,6 @@ export default function PostFlightAnalysisPage() {
   const [durationHrs, setDurationHrs] = useState(75);
   const [statusFilter, setStatusFilter] = useState<CycleStatus | 'all'>('all');
   const [libraryOpen, setLibraryOpen] = useState(true);
-  const [showLabels, setShowLabels] = useState(true);
-  const [showSections, setShowSections] = useState(true);
 
   // Fetch flight library on mount
   useEffect(() => {
@@ -282,17 +280,9 @@ export default function PostFlightAnalysisPage() {
               Free-turbine turboshaft · labelled by section · wear per component (cumulative) · delta vs previous flight
             </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-            <HotspotLegend items={hotspots} />
-            <SectionLegend />
-            <div style={{ display: 'flex', gap: 14 }}>
-              <LabelToggle label="Metric labels" on={showLabels} onChange={setShowLabels} />
-              <LabelToggle label="Section tags" on={showSections} onChange={setShowSections} />
-            </div>
-          </div>
         </div>
         <div style={{ height: 380, position: 'relative' }}>
-          <EngineModel3D frame={headlineFrame} hotspots={hotspots} showLabels={showLabels} showSections={showSections} />
+          <EngineModel3D frame={headlineFrame} hotspots={hotspots} />
         </div>
       </div>
 
